@@ -4,11 +4,10 @@ from __future__ import annotations
 import html
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 from checker.models import Evidence, FieldValue, Proposal, Result, ValueStatus
-from checker.queries import FIELD_LABELS, deliveries_before, field_answer, fmt_value
+from checker.queries import FIELD_LABELS, deliveries_before, field_answer, fmt_value, group_documents
 from checker.resolver import check, fmt_date
 
 DEFAULT_CHECK_DATE = date(2026, 3, 10)
@@ -35,6 +34,19 @@ CSS = """
 .badge {display: inline-block; padding: 0 6px; border-radius: 4px; font-size: .8rem;}
 .b-ok {background: rgba(0, 160, 80, .18);} .b-nd {background: rgba(130, 130, 130, .25);}
 .b-rv {background: rgba(230, 60, 30, .22);}
+table.grp {width: 100%; border-collapse: collapse; font-size: .9rem;}
+table.grp th, table.grp td {padding: 5px 8px; border-bottom: 1px solid rgba(128, 128, 128, .25);
+                            text-align: left; vertical-align: top;}
+table.grp th {font-weight: 600; opacity: .8;}
+table.grp tr.g-contract td {background: rgba(70, 130, 220, .14); font-weight: 600;
+                            border-top: 2px solid rgba(70, 130, 220, .55);}
+table.grp tr.g-orphan td {background: rgba(230, 60, 30, .12); font-weight: 600;
+                          border-top: 2px solid rgba(230, 60, 30, .5);}
+table.grp tr.g-doc td {font-weight: 400;}
+table.grp td:first-child, table.grp td:nth-child(5), table.grp td:nth-child(6),
+table.grp td:nth-child(4) {white-space: nowrap;}
+table.grp tr.g-doc td:first-child {padding-left: 28px;}
+table.grp tr.g-doc td:first-child::before {content: "└ "; opacity: .5;}
 </style>
 """
 
@@ -115,6 +127,43 @@ def source_html(result: Result, doc_index: dict[str, int]) -> dict[str, str]:
     return out
 
 
+GROUP_COLUMNS = ["Договор / документ", "Поставщик / тип документа", "Статус документа", "Вступает в силу",
+                 "Сумма, ₽ (с НДС)", "Срок поставки", "Изменено документом",
+                 "Несогласованные изменения / замечания"]
+
+
+def grouped_table_html(result: Result, doc_index: dict[str, int]) -> str:
+    """Одна таблица: строка договора с итоговыми значениями, под ней — относящиеся к нему файлы."""
+    esc = html.escape
+    orphan_reason = {o.document.filename: o.reason for o in result.orphans}
+
+    def tr(cls: str, cells: list[str]) -> str:
+        return f'<tr class="{cls}">' + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+
+    rows = ["<table class='grp'><thead><tr>" + "".join(f"<th>{c}</th>" for c in GROUP_COLUMNS)
+            + "</tr></thead><tbody>"]
+    for row, docs in group_documents(result):
+        if row is not None:
+            changed_by = sorted({e.filename for f in ("amount", "delivery")
+                                 if row.field(f).changed for e in row.field(f).evidence})
+            pending = "; ".join(f"{FIELD_LABELS[p.field].lower()} → {fmt_value(p.value)} ({p.kind.value})"
+                                for p in row.proposals)
+            rows.append(tr("g-contract", [
+                esc(row.number), esc(cell(row.supplier)), "", "", esc(cell(row.amount)),
+                esc(cell(row.delivery)), esc(", ".join(changed_by) or "—"), esc(pending or "—")]))
+        else:
+            rows.append(tr("g-orphan", ["Не привязаны к договору", "", "", "", "", "", "", ""]))
+        for d in docs:
+            notes = [orphan_reason[d.filename]] if d.filename in orphan_reason else []
+            notes += [w for w in d.warnings if w not in notes]
+            link = f'<a href="#src-{doc_index[d.filename]}-p1">{esc(d.filename)}</a>' if d.paragraphs else esc(d.filename)
+            rows.append(tr("g-doc", [
+                link, esc(d.doc_type.value), esc(d.status.value), esc(fmt_date(d.effective_date)),
+                "", "", "", esc("; ".join(notes) or "—")]))
+    rows.append("</tbody></table>")
+    return "".join(rows)
+
+
 # --- страница ----------------------------------------------------------------
 
 st.set_page_config(page_title="Проверка договоров поставки", page_icon="📑", layout="wide")
@@ -144,22 +193,13 @@ for d in result.documents:
     for w in d.warnings:
         st.warning(f"**{d.filename}**: {w}")
 
-# 1. Сводная таблица
+# 1. Договоры и относящиеся к ним документы
 st.header(f"Договоры на {fmt_date(check_date)}")
-if result.rows:
-    table = pd.DataFrame([{
-        "Договор": r.number,
-        "Поставщик": cell(r.supplier),
-        "Сумма, ₽ (с НДС)": cell(r.amount),
-        "Срок поставки": cell(r.delivery),
-        "Изменено документом": ", ".join(sorted({e.filename for f in ("amount", "delivery")
-                                                  if r.field(f).changed for e in r.field(f).evidence})) or "—",
-        "Несогласованные изменения": "; ".join(
-            f"{FIELD_LABELS[p.field].lower()} → {fmt_value(p.value)} ({p.kind.value})" for p in r.proposals) or "—",
-    } for r in result.rows])
-    st.dataframe(table, hide_index=True, use_container_width=True)
-else:
+st.caption("Строка договора — итоговые значения на дату проверки. Под ней — загруженные файлы, которые к нему "
+           "относятся (привязка по номеру договора). Имя файла ведёт к его тексту.")
+if not result.rows:
     st.info("Договоры не найдены среди загруженных файлов.")
+st.markdown(grouped_table_html(result, doc_index), unsafe_allow_html=True)
 
 # 2. Вопросы
 st.header("Вопросы")
@@ -203,26 +243,9 @@ for row in result.rows:
         st.markdown(field_html("supplier", row.supplier, [], doc_index), unsafe_allow_html=True)
         for f in ("amount", "delivery"):
             st.markdown(field_html(f, row.field(f), row.proposals_for(f), doc_index), unsafe_allow_html=True)
-        st.caption("Связанные документы: " + "; ".join(
-            f"{d.filename} ({d.doc_type.value}, {d.status.value})" for d in row.documents))
 
-if result.orphans:
-    st.header("Документы без договора")
-    for o in result.orphans:
-        if o.reason not in o.document.warnings:  # предупреждение уже показано выше
-            st.warning(f"**{o.document.filename}**: {o.reason}")
-        else:
-            st.markdown(f"- **{o.document.filename}**: {o.reason}")
-
-# 4. Загруженные документы и исходные тексты
-st.header("Загруженные документы")
-st.dataframe(pd.DataFrame([{
-    "Файл": d.filename, "Тип": d.doc_type.value, "Договор": d.contract_number or "—",
-    "Статус": d.status.value, "Вступает в силу": fmt_date(d.effective_date),
-    "Замечания": "; ".join(d.warnings) or "—",
-} for d in result.documents]), hide_index=True, use_container_width=True)
-
-st.subheader("Исходные тексты")
+# 4. Исходные тексты
+st.header("Исходные тексты")
 st.caption("Абзацы, на которые ссылаются значения, подсвечены. Ссылка 📄 прокручивает к нужному абзацу.")
 for name, body in source_html(result, doc_index).items():
     st.markdown(f"**{html.escape(name)}**", unsafe_allow_html=True)

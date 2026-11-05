@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-from .models import ContractRow, FieldValue, Proposal, Result, ValueStatus
+from .models import ContractRow, Document, DocType, FieldValue, Proposal, Result, ValueStatus
 
 FIELD_LABELS = {"amount": "Сумма договора", "delivery": "Срок поставки", "supplier": "Поставщик"}
 
@@ -58,3 +58,20 @@ def deliveries_before(result: Result, before: date) -> EarlyDeliveries:
             review.append(row)
     pending = [p for row in result.rows for p in row.proposals_for("delivery")]
     return EarlyDeliveries(before, matches, review, pending)
+
+
+_TYPE_ORDER = {DocType.CONTRACT: 0, DocType.AMENDMENT: 1, DocType.DRAFT: 2, DocType.LETTER: 3, DocType.UNKNOWN: 4}
+
+
+def _doc_key(d: Document):
+    # Только порядок отображения; на расчёт значений не влияет.
+    return (_TYPE_ORDER[d.doc_type], d.doc_date or date.max, d.filename)
+
+
+def group_documents(result: Result) -> list[tuple[Optional[ContractRow], list[Document]]]:
+    """Загруженные документы, сгруппированные по договорам; последняя группа (None) — не привязанные."""
+    groups: list[tuple[Optional[ContractRow], list[Document]]] = [
+        (row, sorted(row.documents, key=_doc_key)) for row in result.rows]
+    if result.orphans:
+        groups.append((None, sorted((o.document for o in result.orphans), key=_doc_key)))
+    return groups

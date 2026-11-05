@@ -13,7 +13,7 @@ import pytest
 
 from checker.extractors import words_to_int
 from checker.models import ValueStatus
-from checker.queries import deliveries_before, field_answer
+from checker.queries import deliveries_before, field_answer, group_documents
 from checker.resolver import check
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -184,3 +184,30 @@ def test_questions_from_task():
 ])
 def test_words_to_int(words, value):
     assert words_to_int(words) == value
+
+
+# --- группировка документов по договорам (объединённая таблица UI) ----------
+
+def _groups(name):
+    return [(row.number if row else None, [d.filename for d in docs])
+            for row, docs in group_documents(run(name))]
+
+
+def test_group_documents_base():
+    """TC-01: каждый файл показан под своим договором, договор — первым в группе."""
+    assert _groups("base") == [
+        ("STN-101", ["01_contract.txt", "02_amendment_signed.txt", "06_amendment_draft.txt"]),
+        ("STN-102", ["03_contract.txt", "05_supplier_email.txt"]),
+        ("STN-103", ["04_contract.txt"]),
+    ]
+
+
+@pytest.mark.parametrize("name,orphans", [
+    ("tc18_orphan_amendment", ["02_amendment_signed.txt"]),   # TC-18
+    ("tc20_encoding_empty", ["empty.txt"]),                   # TC-20
+])
+def test_group_documents_orphans(name, orphans):
+    groups = _groups(name)
+    assert groups[-1] == (None, orphans)
+    grouped = [f for _, files in groups for f in files]
+    assert len(grouped) == len(set(grouped)) == len(run(name).documents)  # каждый файл ровно один раз
