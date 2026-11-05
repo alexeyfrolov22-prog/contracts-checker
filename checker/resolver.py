@@ -56,7 +56,8 @@ def _apply(fv: FieldValue, changes: list[tuple[date, Extraction, Document]]) -> 
             if ex.value not in values:
                 values.append(ex.value)
         evidence = [e for _, ex, _ in group for e in ex.evidence]
-        source = f"ДС, в силе с {fmt_date(eff)}"
+        eff_notes = sorted({d.effective_note for _, _, d in group if d.effective_note})
+        source = f"ДС, в силе с {fmt_date(eff)}" + (f" ({', '.join(eff_notes)})" if eff_notes else "")
         if len(values) > 1:
             fv.value, fv.status, fv.evidence = None, ValueStatus.REVIEW, evidence
             fv.candidates = [(ex.value, ex.evidence[0]) for _, ex, _ in group]

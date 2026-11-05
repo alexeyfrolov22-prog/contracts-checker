@@ -6,128 +6,691 @@
       "dir": "documents",
       "cases": "TC-01..TC-09",
       "contracts": {
-        "STN-101": {"supplier": "ООО «Вектор Прибор»",
-                    "amount": {"value": 1380000, "status": "ok", "source": ["02_amendment_signed.txt"], "was": 1200000},
-                    "delivery": {"value": "30.04.2026", "status": "ok", "source": ["02_amendment_signed.txt"], "was": "15.04.2026"}},
-        "STN-102": {"supplier": "ООО «Контур Электро»",
-                    "amount": {"value": 840000, "status": "ok", "source": ["03_contract.txt"]},
-                    "delivery": {"value": "20.03.2026", "status": "ok", "source": ["03_contract.txt"]}},
-        "STN-103": {"supplier": "ООО «ПромСнаб Сервис»",
-                    "amount": {"value": null, "status": "нет данных", "source": ["04_contract.txt"]},
-                    "delivery": {"value": "30.04.2026", "status": "ok", "source": ["04_contract.txt"]}}
+        "STN-101": {
+          "supplier": "ООО «Вектор Прибор»",
+          "amount": {
+            "value": 1380000,
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt"
+            ],
+            "was": 1200000
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt"
+            ],
+            "was": "15.04.2026"
+          }
+        },
+        "STN-102": {
+          "supplier": "ООО «Контур Электро»",
+          "amount": {
+            "value": 840000,
+            "status": "ok",
+            "source": [
+              "03_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "20.03.2026",
+            "status": "ok",
+            "source": [
+              "03_contract.txt"
+            ]
+          }
+        },
+        "STN-103": {
+          "supplier": "ООО «ПромСнаб Сервис»",
+          "amount": {
+            "value": null,
+            "status": "нет данных",
+            "source": [
+              "04_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "04_contract.txt"
+            ]
+          }
+        }
       },
       "proposals": [
-        {"contract": "STN-101", "field": "amount", "value": 1450000, "kind": "проект, не подписан", "source": "06_amendment_draft.txt"},
-        {"contract": "STN-101", "field": "delivery", "value": "10.05.2026", "kind": "проект, не подписан", "source": "06_amendment_draft.txt"},
-        {"contract": "STN-102", "field": "delivery", "value": "27.03.2026", "kind": "предложение в письме", "source": "05_supplier_email.txt"}
+        {
+          "contract": "STN-101",
+          "field": "amount",
+          "value": 1450000,
+          "kind": "проект, не подписан",
+          "source": "06_amendment_draft.txt"
+        },
+        {
+          "contract": "STN-101",
+          "field": "delivery",
+          "value": "10.05.2026",
+          "kind": "проект, не подписан",
+          "source": "06_amendment_draft.txt"
+        },
+        {
+          "contract": "STN-102",
+          "field": "delivery",
+          "value": "27.03.2026",
+          "kind": "предложение в письме",
+          "source": "05_supplier_email.txt"
+        }
       ],
       "orphans": [],
-      "delivery_before": {"date": "01.04.2026", "contracts": ["STN-102"], "with_pending_term_change": ["STN-102"]}
+      "delivery_before": {
+        "date": "01.04.2026",
+        "contracts": [
+          "STN-102"
+        ],
+        "with_pending_term_change": [
+          "STN-102"
+        ]
+      }
     },
     "a3_later_wins": {
       "cases": "TC-22",
       "contracts": {
-        "STN-101": {"amount": {"value": 1380000, "status": "ok", "source": ["02_amendment_signed.txt"]},
-                    "delivery": {"value": "20.05.2026", "status": "ok", "source": ["00_amendment_3.txt"],
-                                 "history": ["15.04.2026", "30.04.2026", "20.05.2026"]}}
+        "STN-101": {
+          "amount": {
+            "value": 1380000,
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt"
+            ]
+          },
+          "delivery": {
+            "value": "20.05.2026",
+            "status": "ok",
+            "source": [
+              "00_amendment_3.txt"
+            ],
+            "history": [
+              "15.04.2026",
+              "30.04.2026",
+              "20.05.2026"
+            ]
+          }
+        }
       }
     },
     "a3_conflict": {
       "cases": "TC-23",
       "contracts": {
-        "STN-101": {"amount": {"value": 1380000, "status": "ok", "source": ["02_amendment_signed.txt"]},
-                    "delivery": {"value": null, "status": "требует проверки",
-                                 "source": ["02_amendment_signed.txt", "07_amendment_4.txt"],
-                                 "candidates": ["30.04.2026", "25.04.2026"]}}
+        "STN-101": {
+          "amount": {
+            "value": 1380000,
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt"
+            ]
+          },
+          "delivery": {
+            "value": null,
+            "status": "требует проверки",
+            "source": [
+              "02_amendment_signed.txt",
+              "07_amendment_4.txt"
+            ],
+            "candidates": [
+              "30.04.2026",
+              "25.04.2026"
+            ]
+          }
+        }
       }
     },
     "a3_same_value": {
       "cases": "TC-24",
       "contracts": {
-        "STN-101": {"delivery": {"value": "30.04.2026", "status": "ok", "source": ["02_amendment_signed.txt", "08_amendment_5.txt"]}}
+        "STN-101": {
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt",
+              "08_amendment_5.txt"
+            ]
+          }
+        }
       }
     },
     "tc10_not_effective": {
       "cases": "TC-10",
       "contracts": {
-        "STN-101": {"amount": {"value": 1200000, "status": "ok", "source": ["01_contract.txt"]},
-                    "delivery": {"value": "15.04.2026", "status": "ok", "source": ["01_contract.txt"]}}
+        "STN-101": {
+          "amount": {
+            "value": 1200000,
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          }
+        }
       },
       "proposals": [
-        {"contract": "STN-101", "field": "amount", "value": 1380000, "kind": "подписано, ещё не вступило в силу", "source": "02_amendment_signed.txt"},
-        {"contract": "STN-101", "field": "delivery", "value": "30.04.2026", "kind": "подписано, ещё не вступило в силу", "source": "02_amendment_signed.txt"},
-        {"contract": "STN-101", "field": "amount", "value": 1450000, "kind": "проект, не подписан", "source": "06_amendment_draft.txt"},
-        {"contract": "STN-101", "field": "delivery", "value": "10.05.2026", "kind": "проект, не подписан", "source": "06_amendment_draft.txt"},
-        {"contract": "STN-102", "field": "delivery", "value": "27.03.2026", "kind": "предложение в письме", "source": "05_supplier_email.txt"}
+        {
+          "contract": "STN-101",
+          "field": "amount",
+          "value": 1380000,
+          "kind": "подписано, ещё не вступило в силу",
+          "source": "02_amendment_signed.txt"
+        },
+        {
+          "contract": "STN-101",
+          "field": "delivery",
+          "value": "30.04.2026",
+          "kind": "подписано, ещё не вступило в силу",
+          "source": "02_amendment_signed.txt"
+        },
+        {
+          "contract": "STN-101",
+          "field": "amount",
+          "value": 1450000,
+          "kind": "проект, не подписан",
+          "source": "06_amendment_draft.txt"
+        },
+        {
+          "contract": "STN-101",
+          "field": "delivery",
+          "value": "10.05.2026",
+          "kind": "проект, не подписан",
+          "source": "06_amendment_draft.txt"
+        },
+        {
+          "contract": "STN-102",
+          "field": "delivery",
+          "value": "27.03.2026",
+          "kind": "предложение в письме",
+          "source": "05_supplier_email.txt"
+        }
       ]
     },
     "tc11_draft_status": {
       "cases": "TC-11",
       "contracts": {
-        "STN-101": {"amount": {"value": 1200000, "status": "ok", "source": ["01_contract.txt"]},
-                    "delivery": {"value": "15.04.2026", "status": "ok", "source": ["01_contract.txt"]}}
+        "STN-101": {
+          "amount": {
+            "value": 1200000,
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          }
+        }
       }
     },
     "tc12_ambiguous_status": {
       "cases": "TC-12",
       "contracts": {
-        "STN-101": {"amount": {"status": "требует проверки"},
-                    "delivery": {"status": "требует проверки"}}
+        "STN-101": {
+          "amount": {
+            "status": "требует проверки"
+          },
+          "delivery": {
+            "status": "требует проверки"
+          }
+        }
       }
     },
     "tc13_contract_only": {
       "cases": "TC-13",
       "contracts": {
-        "STN-101": {"amount": {"value": 1200000, "status": "ok", "source": ["01_contract.txt"]},
-                    "delivery": {"value": "15.04.2026", "status": "ok", "source": ["01_contract.txt"]}}
+        "STN-101": {
+          "amount": {
+            "value": 1200000,
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "01_contract.txt"
+            ]
+          }
+        }
       }
     },
     "tc14_changed_amount": {
       "cases": "TC-14",
-      "contracts": {"STN-102": {"amount": {"value": 910000, "status": "ok", "source": ["03_contract.txt"]}}}
+      "contracts": {
+        "STN-102": {
+          "amount": {
+            "value": 910000,
+            "status": "ok",
+            "source": [
+              "03_contract.txt"
+            ]
+          }
+        }
+      }
     },
     "tc15_new_contract": {
       "cases": "TC-15",
       "contracts": {
-        "STN-104": {"supplier": "ООО «Альфа Ресурс»",
-                    "amount": {"value": 450000, "status": "ok", "source": ["07_contract.txt"]},
-                    "delivery": {"value": "25.03.2026", "status": "ok", "source": ["07_contract.txt"]}}
+        "STN-104": {
+          "supplier": "ООО «Альфа Ресурс»",
+          "amount": {
+            "value": 450000,
+            "status": "ok",
+            "source": [
+              "07_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "25.03.2026",
+            "status": "ok",
+            "source": [
+              "07_contract.txt"
+            ]
+          }
+        }
       },
       "row_count": 4,
-      "delivery_before": {"date": "01.04.2026", "contracts": ["STN-102", "STN-104"], "with_pending_term_change": ["STN-102"]}
+      "delivery_before": {
+        "date": "01.04.2026",
+        "contracts": [
+          "STN-102",
+          "STN-104"
+        ],
+        "with_pending_term_change": [
+          "STN-102"
+        ]
+      }
     },
     "tc16_renamed": {
       "cases": "TC-16",
       "contracts": {
-        "STN-101": {"amount": {"value": 1380000, "status": "ok", "source": ["99_x.txt"]},
-                    "delivery": {"value": "30.04.2026", "status": "ok", "source": ["99_x.txt"]}},
-        "STN-102": {"amount": {"value": 840000, "status": "ok"}, "delivery": {"value": "20.03.2026", "status": "ok"}},
-        "STN-103": {"amount": {"value": null, "status": "нет данных"}, "delivery": {"value": "30.04.2026", "status": "ok"}}
+        "STN-101": {
+          "amount": {
+            "value": 1380000,
+            "status": "ok",
+            "source": [
+              "99_x.txt"
+            ]
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "99_x.txt"
+            ]
+          }
+        },
+        "STN-102": {
+          "amount": {
+            "value": 840000,
+            "status": "ok"
+          },
+          "delivery": {
+            "value": "20.03.2026",
+            "status": "ok"
+          }
+        },
+        "STN-103": {
+          "amount": {
+            "value": null,
+            "status": "нет данных"
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok"
+          }
+        }
       }
     },
     "tc17a_missing_term_contract": {
       "cases": "TC-17 (a)",
-      "contracts": {"STN-101": {"delivery": {"value": "30.04.2026", "status": "ok", "source": ["02_amendment_signed.txt"]}}}
+      "contracts": {
+        "STN-101": {
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "02_amendment_signed.txt"
+            ]
+          }
+        }
+      }
     },
     "tc17b_missing_term_everywhere": {
       "cases": "TC-17 (b)",
-      "contracts": {"STN-101": {"delivery": {"value": null, "status": "нет данных"},
-                                "amount": {"value": 1380000, "status": "ok"}}}
+      "contracts": {
+        "STN-101": {
+          "delivery": {
+            "value": null,
+            "status": "нет данных"
+          },
+          "amount": {
+            "value": 1380000,
+            "status": "ok"
+          }
+        }
+      }
     },
     "tc18_orphan_amendment": {
       "cases": "TC-18",
       "row_count": 0,
-      "orphans": ["02_amendment_signed.txt"]
+      "orphans": [
+        "02_amendment_signed.txt"
+      ]
     },
     "tc19a_digits_vs_words": {
       "cases": "TC-19a",
-      "contracts": {"STN-102": {"amount": {"value": 910000, "status": "требует проверки", "source": ["03_contract.txt"]}}}
+      "contracts": {
+        "STN-102": {
+          "amount": {
+            "value": 910000,
+            "status": "требует проверки",
+            "source": [
+              "03_contract.txt"
+            ]
+          }
+        }
+      }
     },
     "tc20_encoding_empty": {
       "cases": "TC-20",
-      "contracts": {"STN-102": {"amount": {"value": 840000, "status": "ok"}, "delivery": {"value": "20.03.2026", "status": "ok"}}},
+      "contracts": {
+        "STN-102": {
+          "amount": {
+            "value": 840000,
+            "status": "ok"
+          },
+          "delivery": {
+            "value": "20.03.2026",
+            "status": "ok"
+          }
+        }
+      },
       "row_count": 3,
-      "orphans": ["empty.txt"]
+      "orphans": [
+        "empty.txt"
+      ]
+    },
+    "robust_wording": {
+      "cases": "TC-25..TC-37 (варианты V01–V13)",
+      "row_count": 14,
+      "orphans": [],
+      "contracts": {
+        "STN-201": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v01_title_not_first.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v01_title_not_first.txt"
+            ]
+          }
+        },
+        "STN-202": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v02_no_status_line.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v02_no_status_line.txt"
+            ]
+          }
+        },
+        "45/2026": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v03_slash_number.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v03_slash_number.txt"
+            ]
+          }
+        },
+        "STN-204": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v04_price_synonym.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v04_price_synonym.txt"
+            ]
+          }
+        },
+        "STN-205": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v05_sum_rub_word_date.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v05_sum_rub_word_date.txt"
+            ]
+          }
+        },
+        "STN-206": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v06_line_wraps.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v06_line_wraps.txt"
+            ]
+          }
+        },
+        "STN-207": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v07_relative_term.txt"
+            ]
+          },
+          "delivery": {
+            "value": null,
+            "status": "требует проверки",
+            "source": [
+              "v07_relative_term.txt"
+            ]
+          }
+        },
+        "STN-208": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v08_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "v08_amendment_on_signing.txt"
+            ]
+          }
+        },
+        "STN-209": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v09_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "30.04.2026",
+            "status": "ok",
+            "source": [
+              "v09_amendment_extended.txt"
+            ]
+          }
+        },
+        "STN-210": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v10_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v10_contract.txt"
+            ]
+          }
+        },
+        "STN-211": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v11_signed_by_parties.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v11_signed_by_parties.txt"
+            ]
+          }
+        },
+        "STN-212": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v12_lowercase_title.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v12_lowercase_title.txt"
+            ]
+          }
+        },
+        "STN-213": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 1200000,
+            "status": "ok",
+            "source": [
+              "v13_digits_no_spaces.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v13_digits_no_spaces.txt"
+            ]
+          }
+        },
+        "STN-214": {
+          "supplier": "ООО «Бета»",
+          "amount": {
+            "value": 500000,
+            "status": "ok",
+            "source": [
+              "v10b_contract.txt"
+            ]
+          },
+          "delivery": {
+            "value": "15.04.2026",
+            "status": "ok",
+            "source": [
+              "v10b_contract.txt"
+            ]
+          }
+        }
+      },
+      "proposals": [
+        {
+          "contract": "STN-210",
+          "field": "delivery",
+          "value": "25.04.2026",
+          "kind": "предложение в письме",
+          "source": "v10_letter_no_title.txt"
+        },
+        {
+          "contract": "STN-214",
+          "field": "delivery",
+          "value": "22.04.2026",
+          "kind": "предложение в письме",
+          "source": "v10b_letter_number_in_body.txt"
+        }
+      ]
     }
   }
 }

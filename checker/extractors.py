@@ -1,7 +1,8 @@
 """Правила извлечения полей. Значение возвращается только вместе с абзацем-источником.
 
-Принцип: если правило не нашло однозначного значения — статус «нет данных» или
-«требует проверки», но не догадка.
+Правила работают по нормализованному тексту абзаца (`Paragraph.norm`), цитата берётся
+дословно из файла (`Paragraph.text`). Если однозначного значения нет — «нет данных»
+или «требует проверки», но не догадка.
 """
 from __future__ import annotations
 
@@ -10,13 +11,12 @@ from datetime import date
 from typing import Iterable, Optional
 
 from .models import Document, Evidence, Extraction, Paragraph, ValueStatus
-from .parser import DATE_RE, parse_date
+from .parser import DATE_ANY, find_dates, parse_date
 
 # --- общие утилиты ---------------------------------------------------------
 
 REDACTION_RE = re.compile(r"в\s+следующей\s+редакции\s*:\s*«", re.IGNORECASE)
-CHANGE_CLAUSE_RE = re.compile(r"[Пп]ункт\w*\s+(\d+(?:\.\d+)*)")
-HEADER_PREFIXES = ("дата", "статус:", "от:", "кому:", "тема:")
+HEADER_PREFIXES = ("дата:", "дата проекта:", "статус:", "от:", "кому:", "тема:")
 
 
 def redaction_text(text: str) -> Optional[str]:
@@ -29,11 +29,11 @@ def redaction_text(text: str) -> Optional[str]:
 
 
 def is_header(p: Paragraph) -> bool:
-    return p.text.lower().startswith(HEADER_PREFIXES)
+    return p.norm.lower().startswith(HEADER_PREFIXES)
 
 
 def sentences(text: str) -> list[str]:
-    # Точка внутри даты/номера пункта не разрывает предложение.
+    # Точка внутри даты или номера пункта не разрывает предложение.
     return [s for s in re.split(r"(?<=[.!?»])\s+(?=[А-ЯЁA-Z«])", text) if s.strip()]
 
 
@@ -48,11 +48,15 @@ def unique(values: Iterable) -> list:
 # --- сумма -----------------------------------------------------------------
 
 MONEY_RE = re.compile(
-    r"(?<![\d.,])(\d+(?:[  ]\d{3})*)(?:,\d{1,2})?\s*(?:\(([^()]*)\)\s*)?(?:руб|₽)",
+    r"(?<![\d.,])(\d+(?:[  ]\d{3})*)(?:,\d{1,2})?\s*(?:\(([^()]*)\)\s*)?(?:руб|₽|RUB\b|р\.)",
     re.IGNORECASE,
 )
-PRICE_KEY_RE = re.compile(r"(общ\w*|итогов\w*)\s+стоимост\w*|цен\w*\s+договора", re.IGNORECASE)
-# Абзацы о суммах, которые не являются ценой договора.
+PRICE_KEY_RE = re.compile(
+    r"(?:общ\w*|итогов\w*)\s+(?:стоимост|сумм|цен)\w*|цен\w*\s+(?:договора|товара)"
+    r"|сумм\w*\s+договора|стоимост\w*\s+договора",
+    re.IGNORECASE,
+)
+# Суммы, которые не являются ценой договора.
 PRICE_EXCLUDE_RE = re.compile(r"аванс|лимит|бюджет|не\s+является|неустой|штраф|пени", re.IGNORECASE)
 
 _UNITS = {
@@ -98,7 +102,7 @@ def _money_in(text: str) -> list[tuple[int, Optional[str]]]:
 
 
 def amount_from_text(text: str) -> tuple[list[int], list[str]]:
-    """Суммы цены договора в фрагменте. Возвращает (значения, замечания о расхождении с прописью)."""
+    """Суммы цены договора во фрагменте. Возвращает (значения, замечания о расхождении с прописью)."""
     values, notes = [], []
     for sent in sentences(text):
         if not PRICE_KEY_RE.search(sent) or PRICE_EXCLUDE_RE.search(sent):
@@ -118,33 +122,42 @@ def is_price_paragraph(text: str) -> bool:
 
 # --- срок поставки ---------------------------------------------------------
 
-DELIVERY_KEY_RE = re.compile(r"постав(?:к|ит|л)", re.IGNORECASE)
+DELIVERY_KEY_RE = re.compile(r"постав(?:к|ит|л)|срок\w*\s+поставки", re.IGNORECASE)
 DELIVERY_EXCLUDE_RE = re.compile(r"оплат|при[её]мк|по\s+состоянию\s+на", re.IGNORECASE)
-DATE_FIND_RE = re.compile(DATE_RE)
-NEW_DATE_RE = re.compile(r"\bна\s+" + DATE_RE)
-NOT_LATER_RE = re.compile(r"не\s+позднее\s+" + DATE_RE)
+# Порядок важен: «на DATE» (новая дата при переносе) → «не позднее» → «до/по» → «срок поставки: DATE».
+DATE_MARKERS = [re.compile(prefix + rf"\s*({DATE_ANY})", re.IGNORECASE) for prefix in (
+    r"\bна", r"не\s+позднее", r"\b(?:до|по)", r"срок\w*\s+поставки\s*[:—–-]")]
+RELATIVE_RE = re.compile(
+    r"в\s+течение\s+\d+|\d+\s+(?:\(\w+\)\s+)?(?:рабоч\w+\s+|календарн\w+\s+)?(?:дн|недел|месяц)",
+    re.IGNORECASE)
+
+
+def _delivery_sentences(text: str) -> list[str]:
+    return [s for s in sentences(text) if DELIVERY_KEY_RE.search(s) and not DELIVERY_EXCLUDE_RE.search(s)]
 
 
 def delivery_from_text(text: str) -> list[date]:
-    found = []
-    for sent in sentences(text):
-        if not DELIVERY_KEY_RE.search(sent) or DELIVERY_EXCLUDE_RE.search(sent):
-            continue
-        dates = DATE_FIND_RE.findall(sent)
+    found: list[Optional[date]] = []
+    for sent in _delivery_sentences(text):
+        dates = find_dates(sent)
         if not dates:
             continue
-        # «перенести с A на B» / «изменить срок на B» → B; «не позднее A» → A.
-        m = NEW_DATE_RE.search(sent) or NOT_LATER_RE.search(sent)
-        if m:
-            found.append(m.group(1))
+        for rx in DATE_MARKERS:
+            if m := rx.search(sent):
+                found.append(parse_date(m.group(1)))
+                break
         else:
             found.extend(dates)
-    return [d for d in (parse_date(s) for s in found) if d]
+    return [d for d in found if d]
 
 
 def is_delivery_paragraph(text: str) -> bool:
-    return any(DELIVERY_KEY_RE.search(s) and not DELIVERY_EXCLUDE_RE.search(s)
-               and re.search(r"срок|не\s+позднее", s, re.IGNORECASE) for s in sentences(text))
+    return any(re.search(r"срок|не\s+позднее", s, re.IGNORECASE) for s in _delivery_sentences(text))
+
+
+def is_relative_delivery(text: str) -> bool:
+    """Срок задан относительно события («в течение 30 дней с даты подписания») — дату не вычислить."""
+    return any(RELATIVE_RE.search(s) and not find_dates(s) for s in _delivery_sentences(text))
 
 
 # --- извлечение из документа ----------------------------------------------
@@ -169,7 +182,7 @@ def extract_amount(doc: Document) -> Extraction:
     for p in doc.paragraphs:
         if is_header(p):
             continue
-        text = redaction_text(p.text) or p.text
+        text = redaction_text(p.norm) or p.norm
         vals, n = amount_from_text(text)
         cands += [(v, doc.evidence(p)) for v in vals]
         notes += n
@@ -179,15 +192,20 @@ def extract_amount(doc: Document) -> Extraction:
 
 
 def extract_delivery(doc: Document) -> Extraction:
-    cands, mentions = [], []
+    cands, mentions, relative = [], [], []
     for p in doc.paragraphs:
         if is_header(p):
             continue
-        text = redaction_text(p.text) or p.text
+        text = redaction_text(p.norm) or p.norm
         vals = delivery_from_text(text)
         cands += [(v, doc.evidence(p)) for v in vals]
-        if not vals and is_delivery_paragraph(text):
+        if not vals and is_relative_delivery(text):
+            relative.append(doc.evidence(p))
+        elif not vals and is_delivery_paragraph(text):
             mentions.append(doc.evidence(p))
+    if not cands and relative:
+        return Extraction(None, ValueStatus.REVIEW, relative,
+                          "срок поставки задан относительно события — календарную дату вычислить нельзя")
     return _resolve(cands, mentions, [], "в тексте нет пункта о сроке поставки")
 
 
@@ -196,7 +214,7 @@ SUPPLIER_RE = re.compile(r"Поставщик:\s*((?:[А-ЯЁA-Z]{2,4}\s*)?«[^�
 
 def extract_supplier(doc: Document) -> Extraction:
     for p in doc.paragraphs:
-        m = SUPPLIER_RE.search(p.text)
+        m = SUPPLIER_RE.search(p.norm)
         if m:
             return Extraction(m.group(1).strip(), ValueStatus.OK, [doc.evidence(p)])
     return Extraction(None, ValueStatus.NO_DATA, [], "поставщик в тексте не указан")

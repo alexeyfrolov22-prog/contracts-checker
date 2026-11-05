@@ -38,9 +38,14 @@ class ProposalKind(str, Enum):
 
 @dataclass(frozen=True)
 class Paragraph:
-    index: int          # порядковый номер непустой строки, с 1
-    text: str           # дословный текст абзаца
+    index: int          # порядковый номер логического абзаца, с 1
+    text: str           # дословный фрагмент файла (может содержать переносы строк) — это цитата
     clause: str = ""    # номер пункта, если есть («3.1», «2»)
+
+    @property
+    def norm(self) -> str:
+        """Текст с нормализованными пробелами — по нему работают правила извлечения."""
+        return " ".join(self.text.split())
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,7 @@ class Document:
     doc_date: Optional[date] = None
     effective_date: Optional[date] = None
     effective_evidence: Optional[Evidence] = None
+    effective_note: str = ""   # напр. «с даты подписания»
     warnings: list[str] = field(default_factory=list)
 
     def evidence(self, p: Paragraph) -> Evidence:

@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from checker.extractors import words_to_int
-from checker.models import ValueStatus
+from checker.models import DocType, SignStatus, ValueStatus
+from checker.parser import detect_status, find_dates, parse_document, split_paragraphs
 from checker.queries import deliveries_before, field_answer, group_documents
 from checker.resolver import check
 
@@ -211,3 +212,75 @@ def test_group_documents_orphans(name, orphans):
     assert groups[-1] == (None, orphans)
     grouped = [f for _, files in groups for f in files]
     assert len(grouped) == len(set(grouped)) == len(run(name).documents)  # каждый файл ровно один раз
+
+
+# --- распознавание по всему тексту (robust_wording и точечные случаи) -------
+
+
+def test_wrapped_lines_form_one_paragraph():
+    """V06: пункт, разорванный переносом, — один абзац; цитата дословная, norm без переноса."""
+    text = "2.1. Общая стоимость поставки составляет\n500 000 рублей, включая НДС.\n3.1. Срок поставки: до 15.04.2026.\n"
+    paras = split_paragraphs(text)
+    assert [p.clause for p in paras] == ["2.1", "3.1"]
+    assert paras[0].text in text and "\n" in paras[0].text
+    assert paras[0].norm == "2.1. Общая стоимость поставки составляет 500 000 рублей, включая НДС."
+
+
+def test_letter_without_title_does_not_crash():
+    """V10: раньше падало с AttributeError. Письмо распознаётся по смыслу и привязывается."""
+    doc = parse_document("x.txt", "Уважаемые коллеги!\nПросим перенести срок поставки по договору № A-1 на 25.04.2026.\n".encode())
+    assert doc.doc_type is DocType.LETTER and doc.contract_number == "A-1"
+
+
+def test_unknown_document_does_not_crash():
+    doc = parse_document("x.txt", "Счёт на оплату № 15 от 01.03.2026\nИтого: 10 000 рублей\n".encode())
+    assert doc.doc_type is DocType.UNKNOWN and doc.warnings
+
+
+@pytest.mark.parametrize("clause", [
+    "5.1. Изменения действуют после подписания дополнительного соглашения обеими сторонами.",
+    "5.1. Договор вступает в силу после подписания сторонами.",
+    "5.1. Договор вступает в силу после подписания обеими сторонами.",
+])
+def test_signing_clause_is_not_a_signature(clause):
+    """«после подписания (обеими) сторонами» — условие, а не факт подписания."""
+    status, _, note = detect_status(split_paragraphs("ДОГОВОР ПОСТАВКИ № A-1\n" + clause))
+    assert status is SignStatus.UNKNOWN and "не найдены" in note
+
+
+@pytest.mark.parametrize("text,status", [
+    ("Статус: подписан сторонами.", SignStatus.SIGNED),
+    ("Статус: подписано Поставщиком 01.03.2026.", SignStatus.UNKNOWN),
+    ("Статус: проект на согласовании.", SignStatus.DRAFT),
+    ("Договор подписан обеими сторонами 05.02.2026.", SignStatus.SIGNED),
+])
+def test_status_phrases(text, status):
+    assert detect_status(split_paragraphs("ДОГОВОР ПОСТАВКИ № A-1\n" + text))[0] is status
+
+
+def test_letter_with_two_contract_numbers_is_not_linked():
+    doc = parse_document("x.txt", "ПИСЬМО\nПросим перенести срок поставки по договору № A-1 и по договору № B-2.\n".encode())
+    assert doc.contract_number is None and any("несколько договоров" in w for w in doc.warnings)
+
+
+def test_amendment_number_is_not_contract_number():
+    """«ДС № 1 К ДОГОВОРУ X» — номер договора X, а не 1."""
+    doc = parse_document("x.txt", "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 1 К ДОГОВОРУ № 45/2026\nСтатус: подписано обеими сторонами.\n".encode())
+    assert doc.contract_number == "45/2026"
+
+
+def test_effective_from_signing_date():
+    """V08: «вступает в силу с даты его подписания» → дата подписания из статуса."""
+    result = run("robust_wording")
+    row = {r.number: r for r in result.rows}["STN-208"]
+    assert "с даты подписания" in row.delivery.history[-1].source
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("до 15 апреля 2026 г.", [date(2026, 4, 15)]),
+    ("не позднее 5.4.2026", [date(2026, 4, 5)]),
+    ("с 20.03.2026 на 27.03.2026", [date(2026, 3, 20), date(2026, 3, 27)]),
+    ("31.02.2026", []),
+])
+def test_find_dates(text, expected):
+    assert find_dates(text) == expected
