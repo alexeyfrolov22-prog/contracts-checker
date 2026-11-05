@@ -13,14 +13,14 @@ from checker.resolver import check, fmt_date
 DEFAULT_CHECK_DATE = date(2026, 3, 10)
 
 FORMAT_HINT = """
-**Требования к формату документов.** Прототип работает на правилах, без LLM, и распознаёт только такой формат:
-- в первой строке указан тип документа: `ДОГОВОР ПОСТАВКИ`, `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ`, `ПРОЕКТ ДОПОЛНИТЕЛЬНОГО СОГЛАШЕНИЯ` или `ПИСЬМО`;
-- номер договора записан в виде `БУКВЫ-ЦИФРЫ` (например, `STN-101`) в первой строке, а у письма — в строке «Тема:»;
-- есть строка `Статус:` с формулировкой «подписан(о) обеими сторонами» или «проект / не подписан»;
-- в доп. соглашении есть фраза «вступает в силу ДД.ММ.ГГГГ»;
-- даты записаны как `ДД.ММ.ГГГГ`, суммы — цифрами с пробелами и словом «рублей»; кодировка UTF-8 или cp1251.
+**Как распознаются документы.** Прототип работает на правилах, без LLM, и ищет признаки по всему тексту, а не по позиции строки:
+- **тип** — по заголовку в начале документа («договор поставки», «дополнительное соглашение», «проект … соглашения», «письмо»); письмо без заголовка — по признакам («Уважаемые», «просим», «От:/Кому:»);
+- **номер договора** — после «договор №», «к договору», «по договору», в любом формате (`STN-101`, `45/2026`);
+- **статус** — строка «Статус:» или фраза в тексте («подписан(о) обеими сторонами», «проект», «не подписан»); подпись одной стороной или противоречивые признаки → «требует проверки»;
+- **вступление ДС в силу** — «вступает в силу ДД.ММ.ГГГГ» или «с даты подписания»;
+- **даты** — `ДД.ММ.ГГГГ` или «15 апреля 2026 г.»; **суммы** — цифрами с «руб.», «рублей», «₽» или «RUB».
 
-Если документ не соответствует формату, приложение не подставляет значение: документ получает предупреждение или статус «требует проверки».
+Ограничения: только TXT (UTF-8 или cp1251); срок «в течение N дней» не пересчитывается в дату; сумма в иностранной валюте и цена в спецификации не извлекаются. Если признак не найден, значение не подставляется: документ получает предупреждение или статус «требует проверки».
 """
 
 CSS = """
@@ -43,6 +43,12 @@ table.grp tr.g-contract td {background: rgba(70, 130, 220, .14); font-weight: 60
 table.grp tr.g-orphan td {background: rgba(230, 60, 30, .12); font-weight: 600;
                           border-top: 2px solid rgba(230, 60, 30, .5);}
 table.grp tr.g-doc td {font-weight: 400;}
+details.src-grp {border: 1px solid rgba(70, 130, 220, .45); border-radius: 6px; margin: 10px 0; padding: 4px 10px;}
+details.src-grp.orphan {border-color: rgba(230, 60, 30, .5);}
+details.src-grp > summary {font-weight: 600; font-size: 1.05rem; cursor: pointer; padding: 4px 0;}
+details.src-doc {margin: 6px 0 6px 14px;}
+details.src-doc > summary {cursor: pointer; padding: 2px 0;}
+details.src-doc > summary .meta {opacity: .65; font-weight: 400;}
 table.grp td:first-child, table.grp td:nth-child(5), table.grp td:nth-child(6),
 table.grp td:nth-child(4) {white-space: nowrap;}
 table.grp tr.g-doc td:first-child {padding-left: 28px;}
@@ -113,7 +119,8 @@ def source_html(result: Result, doc_index: dict[str, int]) -> dict[str, str]:
     for row in result.rows:
         for f in ("supplier", "amount", "delivery"):
             fv = row.field(f)
-            refs |= {anchor(e, doc_index) for e in fv.evidence + [e for _, e in fv.candidates]}
+            refs |= {anchor(e, doc_index) for e in fv.evidence + [e for _, e in fv.candidates]
+                     + [e for step in fv.history for e in step.evidence]}
         refs |= {anchor(p.evidence, doc_index) for p in row.proposals}
     out = {}
     for doc in result.documents:
@@ -162,6 +169,24 @@ def grouped_table_html(result: Result, doc_index: dict[str, int]) -> str:
                 "", "", "", esc("; ".join(notes) or "—")]))
     rows.append("</tbody></table>")
     return "".join(rows)
+
+
+def sources_grouped_html(result: Result, doc_index: dict[str, int]) -> str:
+    """Исходные тексты, сгруппированные как таблица: договор → его файлы, в конце — не привязанные.
+    Группы — <details open>: их можно свернуть; переход по якорю на абзац раскрывает блок."""
+    bodies = source_html(result, doc_index)
+    out = []
+    for row, docs in group_documents(result):
+        if row is not None:
+            title, cls = f"{row.number} — {row.supplier.value or 'поставщик не указан'}", "src-grp"
+        else:
+            title, cls = "Не привязаны к договору", "src-grp orphan"
+        inner = "".join(
+            f'<details open class="src-doc"><summary>📄 <b>{html.escape(d.filename)}</b> '
+            f'<span class="meta">· {html.escape(d.doc_type.value)} · {html.escape(d.status.value)}</span>'
+            f'</summary>{bodies[d.filename]}</details>' for d in docs)
+        out.append(f'<details open class="{cls}"><summary>{html.escape(title)}</summary>{inner}</details>')
+    return "".join(out)
 
 
 # --- страница ----------------------------------------------------------------
@@ -246,7 +271,6 @@ for row in result.rows:
 
 # 4. Исходные тексты
 st.header("Исходные тексты")
-st.caption("Абзацы, на которые ссылаются значения, подсвечены. Ссылка 📄 прокручивает к нужному абзацу.")
-for name, body in source_html(result, doc_index).items():
-    st.markdown(f"**{html.escape(name)}**", unsafe_allow_html=True)
-    st.markdown(body, unsafe_allow_html=True)
+st.caption("Сгруппированы по договорам, как в таблице. Абзацы, на которые ссылаются значения, подсвечены; "
+           "ссылка 📄 прокручивает к нужному абзацу. Группы и файлы можно свернуть кликом по заголовку.")
+st.markdown(sources_grouped_html(result, doc_index), unsafe_allow_html=True)
