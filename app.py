@@ -393,12 +393,43 @@ if options:
         with st.container(height=620):
             st.markdown(view.sources_html(docs, focus), unsafe_allow_html=True)
 
-    if st.session_state.pop("scroll", False):
-        # Прокрутить к карточке и к нужному абзацу внутри панели документов.
-        components.html(f"""<script>
-            setTimeout(() => {{
-              const d = window.parent.document;
-              const card = d.getElementById("card"); if (card) card.scrollIntoView({{behavior: "smooth"}});
-              const t = d.getElementById("{focus or ''}");
-              if (t) setTimeout(() => t.scrollIntoView({{block: "center", behavior: "smooth"}}), 400);
-            }}, 250);</script>""", height=0)
+    # Ссылки 📄 прокручивают только панель документов: стандартный переход по якорю
+    # сдвигал бы и всю страницу. Обработчик ставится один раз на страницу.
+    do_scroll = st.session_state.pop("scroll", False)       # карточку только что открыли кнопкой или из таблицы
+    scroll_to = f'"{focus}"' if do_scroll and focus else "null"
+    open_card_now = "true" if do_scroll else "false"
+    components.html(f"""<script>
+      const w = window.parent, d = w.document;
+      w.__scrollToSrc = (id) => {{
+        const t = d.getElementById(id); if (!t) return false;
+        const det = t.closest("details"); if (det) det.open = true;   // сначала раскрыть документ
+        // Ближайшая панель с собственной прокруткой; саму страницу (stMain) не прокручиваем никогда.
+        const main = d.querySelector('[data-testid="stMain"]');
+        let box = t.parentElement;
+        while (box && box !== main && !/(auto|scroll|overlay)/.test(getComputedStyle(box).overflowY))
+          box = box.parentElement;
+        if (box === main) box = null;
+        d.querySelectorAll(".src-p.focus").forEach(e => e.classList.remove("focus"));
+        t.classList.add("focus");
+        if (box) {{
+          // Центр видимой на экране части панели, а не всей панели: панель может быть выше окна.
+          const r = box.getBoundingClientRect();
+          const visTop = Math.max(r.top, 0), visBottom = Math.min(r.bottom, w.innerHeight);
+          const delta = t.getBoundingClientRect().top + t.offsetHeight / 2 - (visTop + visBottom) / 2;
+          box.scrollBy({{top: delta, behavior: "smooth"}});
+        }}
+        return true;
+      }};
+      if (!w.__srcLinksBound) {{
+        w.__srcLinksBound = true;
+        d.addEventListener("click", (e) => {{
+          const a = e.target.closest && e.target.closest('a[href^="#src-"]');
+          if (!a) return;
+          if (w.__scrollToSrc(a.getAttribute("href").slice(1))) e.preventDefault();
+        }}, true);
+      }}
+      if ({open_card_now}) setTimeout(() => {{
+        const card = d.getElementById("card"); if (card) card.scrollIntoView({{behavior: "smooth"}});
+        const id = {scroll_to}; if (id) setTimeout(() => w.__scrollToSrc(id), 500);
+      }}, 250);
+    </script>""", height=0)
