@@ -96,10 +96,10 @@ def doc_label(d: Document, with_date: bool = True) -> str:
     return d.filename
 
 
-# --- таймлайн значения поля (для карточки договора) ---------------------------
+# --- таймлайн значения поля (для истории договора) ---------------------------
 
 ROLE_WAS, ROLE_CURRENT, ROLE_DOUBT = "было", "действует", "под вопросом"
-ROLE_NO_DATA, ROLE_REVIEW, ROLE_PENDING = "нет данных", "требует проверки", "не действует"
+ROLE_NO_DATA, ROLE_REVIEW, ROLE_PENDING = "нет данных", "требует проверки", "не согласовано"
 
 
 @dataclass
@@ -113,7 +113,7 @@ class TimelineEvent:
 
 
 def field_timeline(row: ContractRow, field_name: str, docs: dict[str, Document]) -> list[TimelineEvent]:
-    """События по документам: что было, что действует, что не действует или требует проверки.
+    """События по документам: что было, что действует, что не согласовано или требует проверки.
 
     Строится из уже посчитанных history / candidates / proposals — новой логики расчёта нет.
     """

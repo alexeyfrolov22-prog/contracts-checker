@@ -302,7 +302,7 @@ def test_doc_labels():
     assert doc_label(empty) == "empty.txt"  # нераспознанный документ — по имени файла
 
 
-# --- таймлайн поля в карточке договора --------------------------------------
+# --- таймлайн поля в истории договора --------------------------------------
 
 def _timeline(name, number, field):
     from checker.queries import field_timeline
@@ -316,11 +316,11 @@ def test_field_timeline():
     assert _timeline("base", "STN-101", "amount") == [
         ("05.02.2026", "01_contract.txt", "было", 1200000),
         ("01.03.2026", "02_amendment_signed.txt", "действует", 1380000),
-        ("06.03.2026", "06_amendment_draft.txt", "не действует", 1450000),
+        ("06.03.2026", "06_amendment_draft.txt", "не согласовано", 1450000),
     ]
     assert _timeline("base", "STN-102", "delivery") == [
         ("10.02.2026", "03_contract.txt", "действует", "20.03.2026"),
-        ("05.03.2026", "05_supplier_email.txt", "не действует", "27.03.2026"),
+        ("05.03.2026", "05_supplier_email.txt", "не согласовано", "27.03.2026"),
     ]
     assert _timeline("base", "STN-103", "amount") == [("20.02.2026", "04_contract.txt", "нет данных", None)]
     assert _timeline("a3_later_wins", "STN-101", "delivery") == [
@@ -340,5 +340,5 @@ def test_field_timeline_review_cases():
     assert _timeline("tc12_ambiguous_status", "STN-101", "amount") == [
         ("05.02.2026", "01_contract.txt", "под вопросом", 1200000),
         ("01.03.2026", "02_amendment_signed.txt", "требует проверки", 1380000),
-        ("06.03.2026", "06_amendment_draft.txt", "не действует", 1450000),
+        ("06.03.2026", "06_amendment_draft.txt", "не согласовано", 1450000),
     ]

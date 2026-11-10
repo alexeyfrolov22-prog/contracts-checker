@@ -1,7 +1,7 @@
 """Streamlit-интерфейс для закупщика. Логика извлечения — в пакете checker/.
 
 Макет: настройки и загрузка — в боковой панели; основной экран начинается с результатов:
-сводка → быстрый ответ → «требует внимания» → таблица договоров → карточка договора
+сводка → быстрый ответ → «требует внимания» → таблица договоров → история договора
 (значения слева, исходные тексты справа, переход к абзацу без ухода со страницы).
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ FORMAT_HINT = """
 Не распознаётся: срок «в течение N дней» (→ «требует проверки»), валюта, цена в спецификации, PDF/DOCX.
 """
 RULE = ("Условия меняет только дополнительное соглашение, **подписанное обеими сторонами и вступившее "
-        "в силу** к дате проверки. Проекты, письма и ещё не вступившие ДС показываются как «не действует». "
+        "в силу** к дате проверки. Проекты, письма и ещё не вступившие ДС показываются как «не согласовано». "
         "Имя файла и порядок загрузки на приоритет не влияют.")
 
 # --- единая система статусов --------------------------------------------------
@@ -43,7 +43,7 @@ STATUS = {
     ValueStatus.REVIEW: ("⚠️", "требует проверки", "s-rv"),
     ValueStatus.NO_DATA: ("∅", "нет данных", "s-nd"),
 }
-PENDING = ("⏳", "не действует", "s-pd")
+PENDING = ("⏳", "не согласовано", "s-pd")
 DOC_STATUS = {
     SignStatus.SIGNED: ("✅", "подписан", "s-ok"),
     SignStatus.DRAFT: ("⏳", "проект", "s-pd"),
@@ -211,7 +211,7 @@ class View:
                 note = f'<span class="tl-note">{html.escape(informative)}</span>' if informative else ""
                 where = (f"п.\u00a0{e.evidence.clause}" if e.evidence.clause      # неразрывный пробел
                          else f"абз.\u00a0{e.evidence.paragraph}")
-                # Внутри карточки номер договора уже известен, а дата стоит в первой колонке.
+                # Внутри истории договора номер договора уже известен, а дата стоит в первой колонке.
                 short = ("Договор" if e.document.doc_type is DocType.CONTRACT
                          else doc_label(e.document, with_date=False))
                 parts.append(
@@ -299,7 +299,7 @@ k[1].metric("✅ Подтверждено", f"{count(ValueStatus.OK)} из {len(
             help="Значений суммы и срока, подтверждённых действующими документами")
 k[2].metric("⚠️ Требует проверки", count(ValueStatus.REVIEW))
 k[3].metric("∅ Нет данных", count(ValueStatus.NO_DATA))
-k[4].metric("⏳ Не действует", sum(len(r.proposals) for r in result.rows),
+k[4].metric("⏳ Не согласовано", sum(len(r.proposals) for r in result.rows),
             help="Изменения из проектов, писем и ещё не вступивших ДС")
 k[5].metric("Без договора", len(result.orphans), help="Файлы, которые не удалось привязать к договору")
 
@@ -329,7 +329,7 @@ if qtype and QUESTIONS[qtype] in ("delivery", "amount") and numbers:
         if fv.evidence:
             st.markdown(view.ev_html(fv.evidence[0], link=False), unsafe_allow_html=True)
         # Ответ — только действующее значение. Несогласованные изменения (проекты, письма, не вступившие ДС)
-        # в ответ не попадают, чтобы не вводить в заблуждение; они видны в таблице и в таймлайне карточки.
+        # в ответ не попадают, чтобы не вводить в заблуждение; они видны в таблице и в таймлайне истории договора.
         b1, b2 = st.columns([1, 3])
         focus = view.anchor(fv.evidence[0]) if fv.evidence else None
         b1.button("Открыть в документе", key="ans_open", on_click=open_card, args=(number, focus),
@@ -400,13 +400,13 @@ if result.rows:
         "Срок поставки": cell(r.delivery),
         "Изменено": ", ".join(sorted({doc_label(view.docs[e.filename]) for f in ("amount", "delivery")
                                       if r.field(f).changed for e in r.field(f).evidence})) or "—",
-        "Не действует": f"⏳ {len(r.proposals)}" if r.proposals else "—",
+        "Не согласовано": f"⏳ {len(r.proposals)}" if r.proposals else "—",
         "Документы": " · ".join(f"{DOC_STATUS[d.status][0]} {doc_label(d)}" for d in docs_of[r.number]),
     } for r in result.rows]
     event = st.dataframe(table, hide_index=True, use_container_width=True, on_select="rerun",
                          selection_mode="single-row", key="contracts_table",
                          column_config={"Документы": st.column_config.TextColumn(width="large")})
-    st.caption("Выберите строку, чтобы открыть карточку договора с основаниями и исходными текстами.")
+    st.caption("Выберите строку, чтобы открыть историю договора с основаниями и исходными текстами.")
     sel = event.selection.rows
     if sel and st.session_state.get("table_sel") != sel:
         st.session_state.table_sel = sel
@@ -414,12 +414,12 @@ if result.rows:
 else:
     st.info("Договоры среди загруженных файлов не найдены.")
 
-# --- 5. карточка договора ----------------------------------------------------------
+# --- 5. история договора ----------------------------------------------------------
 
 options = numbers + ([ORPHANS] if result.orphans else [])
 if options:
     st.markdown('<div id="card"></div>', unsafe_allow_html=True)
-    st.subheader("Карточка договора")
+    st.subheader("История договора")
     current = st.session_state.get("card")
     target = st.selectbox("Договор", options, index=options.index(current) if current in options else 0,
                           format_func=lambda n: n if n == ORPHANS else f"{n} — {rows[n].supplier.value or ''}",
@@ -449,7 +449,7 @@ if options:
 
     # Ссылки 📄 прокручивают только панель документов: стандартный переход по якорю
     # сдвигал бы и всю страницу. Обработчик ставится один раз на страницу.
-    do_scroll = st.session_state.pop("scroll", False)       # карточку только что открыли кнопкой или из таблицы
+    do_scroll = st.session_state.pop("scroll", False)       # историю договора только что открыли кнопкой или из таблицы
     scroll_to = f'"{focus}"' if do_scroll and focus else "null"
     open_card_now = "true" if do_scroll else "false"
     components.html(f"""<script>
