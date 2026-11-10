@@ -328,8 +328,8 @@ if qtype and QUESTIONS[qtype] in ("delivery", "amount") and numbers:
         st.markdown(f"<div>{html.escape(why)}</div>", unsafe_allow_html=True)
         if fv.evidence:
             st.markdown(view.ev_html(fv.evidence[0], link=False), unsafe_allow_html=True)
-        for p in ans.proposals:
-            st.markdown(view.proposal_html(p, link=False), unsafe_allow_html=True)
+        # Ответ — только действующее значение. Несогласованные изменения (проекты, письма, не вступившие ДС)
+        # в ответ не попадают, чтобы не вводить в заблуждение; они видны в таблице и в таймлайне карточки.
         b1, b2 = st.columns([1, 3])
         focus = view.anchor(fv.evidence[0]) if fv.evidence else None
         b1.button("Открыть в документе", key="ans_open", on_click=open_card, args=(number, focus),
