@@ -12,10 +12,11 @@ from datetime import date, timedelta
 import streamlit as st
 import streamlit.components.v1 as components
 
-from checker.models import (Document, Evidence, FieldValue, Proposal, Result, SignStatus,
+from checker.models import (ContractRow, DocType, Document, Evidence, FieldValue, Proposal, Result, SignStatus,
                             ValueStatus)
-from checker.queries import (FIELD_LABELS, deliveries_before, doc_label, field_answer, fmt_value,
-                             group_documents)
+from checker.queries import (FIELD_LABELS, ROLE_CURRENT, ROLE_DOUBT, ROLE_NO_DATA, ROLE_PENDING,
+                             ROLE_REVIEW, ROLE_WAS, deliveries_before, doc_label, field_answer,
+                             field_timeline, fmt_value, group_documents)
 from checker.resolver import check, fmt_date
 
 DEFAULT_CHECK_DATE = date(2026, 3, 10)
@@ -59,9 +60,37 @@ CSS = """
 .muted {opacity: .65;} .small {font-size: .82rem;}
 .ans-q {opacity: .7; font-size: .9rem;}
 .ans-v {font-size: 2rem; font-weight: 700; line-height: 1.2; margin: 2px 0 6px 0;}
-.fld {margin-bottom: 20px;}
-.fld-h {opacity: .65; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em;}
-.fld-v {font-size: 1.35rem; font-weight: 650; margin: 2px 0 4px 0;}
+.fld {margin-bottom: 26px;}
+.fld-h {font-size: 1.3rem; font-weight: 700; line-height: 1.25;}
+.fld-v {font-size: 1.05rem; font-weight: 600; margin: 4px 0 2px 0;}
+.fld-n {font-size: .82rem; font-style: italic; opacity: .8;}
+/* вертикальный таймлайн: одна линия, точка на событие */
+.tl {position: relative; margin: 10px 0 0 6px; padding-left: 18px;
+     border-left: 2px solid rgba(128, 128, 128, .35);}
+.tl-ev {position: relative; padding: 0 0 12px 0;}
+.tl-ev:last-child {padding-bottom: 2px;}
+.tl-ev::before {content: ""; position: absolute; left: -25px; top: 5px; width: 10px; height: 10px;
+                border-radius: 50%; border: 2px solid rgba(128, 128, 128, .8); background: var(--tl-bg, #fff);}
+.tl-ev.r-current::before {background: rgb(0, 150, 75); border-color: rgb(0, 150, 75);}
+.tl-ev.r-was::before {background: transparent;}
+.tl-ev.r-pending::before {border-style: dashed; border-color: rgb(210, 150, 0); background: transparent;}
+.tl-ev.r-review::before, .tl-ev.r-doubt::before {background: rgb(220, 60, 30); border-color: rgb(220, 60, 30);}
+.tl-ev.r-nodata::before {background: transparent; border-style: dotted;}
+/* Строка события — сетка с фиксированными колонками: дата | значение | статус документа | документ,
+   чтобы у всех событий колонки стояли одна под другой. На узком экране — перенос. */
+.tl-row {display: grid; grid-template-columns: 80px 168px 120px 1fr; align-items: baseline;
+         column-gap: 10px; font-size: .88rem;}
+.tl-row > .badge {justify-self: start;}
+@media (max-width: 1100px) {.tl-row {display: flex; flex-wrap: wrap; gap: 4px 10px;}}
+.tl-date {font-variant-numeric: tabular-nums; font-weight: 600;}
+.tl-val b, .tl-doc a {white-space: nowrap;}
+.tl-ev.r-was .tl-val b {text-decoration: line-through; opacity: .6;}
+.tl-role {font-size: .78rem; opacity: .75;}
+.tl-role.tl-pend {opacity: 1; color: rgb(200, 140, 0); font-weight: 600;}
+.tl-role.tl-rv {opacity: 1; color: rgb(215, 55, 30); font-weight: 600;}
+.tl-q {font-size: .82rem; opacity: .85; margin: 3px 0 0 0; padding-left: 8px;
+       border-left: 2px solid rgba(128, 128, 128, .3); white-space: pre-wrap;}
+.tl-note {font-size: .75rem; opacity: .65;}
 .quote {border-left: 3px solid rgba(128, 128, 128, .6); padding: 2px 10px; margin: 3px 0 8px 0; font-size: .9rem;
         white-space: pre-wrap;}
 .pend {border-left: 3px solid rgba(230, 170, 0, .8); padding: 2px 10px; margin: 6px 0;}
@@ -149,25 +178,51 @@ class View:
         return (f'<div class="pend">{badge(*PENDING)} <b>{html.escape(fmt_value(p.value))}</b> '
                 f'<span class="muted">— {html.escape(p.kind.value + extra)}</span><br>{self.ev_html(p.evidence, link)}</div>')
 
-    def field_html(self, name: str, fv: FieldValue, proposals: list[Proposal]) -> str:
+    # Короткие подписи для узких колонок таймлайна.
+    TL_ROLE_TEXT = {ROLE_REVIEW: "проверить"}
+    TL_DOC_STATUS = {SignStatus.UNKNOWN: ("⚠️", "не распознан", "s-rv")}
+
+    ROLE_CLASS = {ROLE_WAS: "r-was", ROLE_CURRENT: "r-current", ROLE_DOUBT: "r-doubt",
+                  ROLE_NO_DATA: "r-nodata", ROLE_REVIEW: "r-review", ROLE_PENDING: "r-pending"}
+
+    def field_html(self, name: str, row: ContractRow) -> str:
+        """Заголовок поля (крупно) → значение со статусом → вертикальный таймлайн документов по датам."""
+        fv = row.field(name)
         parts = [f'<div class="fld"><div class="fld-h">{FIELD_LABELS[name]}</div>'
                  f'<div class="fld-v">{value_with_badge(fv.value, fv.status)}</div>']
         if fv.note:
-            parts.append(f'<div class="small"><i>{html.escape(fv.note)}</i></div>')
-        if fv.evidence:
-            parts.append("".join(self.ev_html(e) for e in fv.evidence))
-        elif fv.status is ValueStatus.NO_DATA:
+            parts.append(f'<div class="fld-n">{html.escape(fv.note)}</div>')
+        events = field_timeline(row, name, self.docs)
+        if not events:
             parts.append('<div class="small muted">Подходящий пункт в тексте не найден.</div>')
-        if fv.changed:
-            chain = " → ".join(
-                f"<b>{html.escape(shown(s.value, s.status))}</b> ("
-                + ", ".join(f'<a href="#{self.anchor(e)}">{html.escape(self.ev_label(e))}</a>' for e in s.evidence)
-                + f"{'; ' + html.escape(s.source) if s.source != 'договор' else ''})" for s in fv.history)
-            parts.append(f'<div class="small">История: {chain}</div>')
-        if fv.candidates:
-            parts.append('<div class="small">Кандидаты для ручной проверки:</div>' + "".join(
-                f"<div>• <b>{html.escape(fmt_value(v))}</b></div>{self.ev_html(e)}" for v, e in fv.candidates))
-        parts += [self.proposal_html(p) for p in proposals]
+        else:
+            parts.append('<div class="tl">')
+            for e in events:
+                when = e.date.strftime("%d.%m.%Y") if e.date else "без даты"
+                role = e.role
+                cls = {ROLE_PENDING: "tl-pend", ROLE_REVIEW: "tl-rv", ROLE_DOUBT: "tl-rv"}.get(role, "")
+                if role == ROLE_NO_DATA:
+                    value = '<span class="muted">∅ значение не указано</span>'
+                else:
+                    value = f'<span class="tl-role {cls}">{self.TL_ROLE_TEXT.get(role, role)}</span> <b>{html.escape(fmt_value(e.value))}</b>'
+                # Пояснение «проект, не подписан» / «предложение в письме» повторяет статус документа —
+                # показываем только то, чего в строке ещё нет (ДС подписано, но не вступило в силу; дата вступления).
+                informative = e.note if (role != ROLE_PENDING or e.document.status is SignStatus.SIGNED) else ""
+                note = f'<span class="tl-note">{html.escape(informative)}</span>' if informative else ""
+                where = (f"п.\u00a0{e.evidence.clause}" if e.evidence.clause      # неразрывный пробел
+                         else f"абз.\u00a0{e.evidence.paragraph}")
+                # Внутри карточки номер договора уже известен, а дата стоит в первой колонке.
+                short = ("Договор" if e.document.doc_type is DocType.CONTRACT
+                         else doc_label(e.document, with_date=False))
+                parts.append(
+                    f'<div class="tl-ev {self.ROLE_CLASS[role]}"><div class="tl-row">'
+                    f'<span class="tl-date">{when}</span>'
+                    f'<span class="tl-val">{value}</span>'
+                    f'{badge(*self.TL_DOC_STATUS.get(e.document.status, DOC_STATUS[e.document.status]))}'
+                    f'<span class="tl-doc"><a href="#{self.anchor(e.evidence)}">📄 {html.escape(short)}</a>'
+                    f' <span class="muted small">{where}</span>{" " + note if note else ""}</span></div>'
+                    f'<div class="tl-q">{html.escape(e.evidence.quote)}</div></div>')
+            parts.append("</div>")
         return "".join(parts) + "</div>"
 
     def sources_html(self, docs: list[Document], focus: str | None) -> str:
@@ -372,7 +427,7 @@ if options:
     if target != current:
         st.session_state.card, st.session_state.focus = target, None
     focus = st.session_state.get("focus")
-    left, right = st.columns([1, 1], gap="large")
+    left, right = st.columns([3, 2], gap="large")
     if target == ORPHANS:
         docs = [o.document for o in result.orphans]
         with left:
@@ -385,8 +440,7 @@ if options:
             for w in row.warnings:
                 st.warning(w)
             for f in ("supplier", "amount", "delivery"):
-                proposals = row.proposals_for(f) if f != "supplier" else []
-                st.markdown(view.field_html(f, row.field(f), proposals), unsafe_allow_html=True)
+                st.markdown(view.field_html(f, row), unsafe_allow_html=True)
     with right:
         st.markdown('<div class="small muted">Документы договора. Подсвечены абзацы-основания; '
                     'ссылка 📄 слева прокручивает эту панель.</div>', unsafe_allow_html=True)

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-from .models import ContractRow, Document, DocType, FieldValue, Proposal, Result, ValueStatus
+from .models import ContractRow, Document, DocType, Evidence, FieldValue, Proposal, Result, Step, ValueStatus
 
 FIELD_LABELS = {"amount": "Сумма договора", "delivery": "Срок поставки", "supplier": "Поставщик"}
 
@@ -81,9 +81,10 @@ def group_documents(result: Result) -> list[tuple[Optional[ContractRow], list[Do
 _AMENDMENT_NO = re.compile(r"соглашени\w*\s+№\s*([\w./-]+)", re.IGNORECASE)
 
 
-def doc_label(d: Document) -> str:
-    """Человекочитаемое название: «ДС № 1 от 01.03.2026», «Письмо от 05.03.2026». Имя файла — запасной вариант."""
-    when = f" от {d.doc_date.strftime('%d.%m.%Y')}" if d.doc_date else ""
+def doc_label(d: Document, with_date: bool = True) -> str:
+    """Человекочитаемое название: «ДС № 1 от 01.03.2026», «Письмо от 05.03.2026». Имя файла — запасной вариант.
+    with_date=False — без даты (когда дата уже показана рядом, например в таймлайне)."""
+    when = f" от {d.doc_date.strftime('%d.%m.%Y')}" if d.doc_date and with_date else ""
     if d.doc_type is DocType.CONTRACT:
         return f"Договор{' № ' + d.contract_number if d.contract_number else ''}{when}"
     if d.doc_type in (DocType.AMENDMENT, DocType.DRAFT):
@@ -93,3 +94,52 @@ def doc_label(d: Document) -> str:
     if d.doc_type is DocType.LETTER:
         return "Письмо" + when
     return d.filename
+
+
+# --- таймлайн значения поля (для карточки договора) ---------------------------
+
+ROLE_WAS, ROLE_CURRENT, ROLE_DOUBT = "было", "действует", "под вопросом"
+ROLE_NO_DATA, ROLE_REVIEW, ROLE_PENDING = "нет данных", "требует проверки", "не действует"
+
+
+@dataclass
+class TimelineEvent:
+    date: Optional[date]
+    document: Document
+    role: str
+    value: object
+    evidence: Evidence
+    note: str = ""
+
+
+def field_timeline(row: ContractRow, field_name: str, docs: dict[str, Document]) -> list[TimelineEvent]:
+    """События по документам: что было, что действует, что не действует или требует проверки.
+
+    Строится из уже посчитанных history / candidates / proposals — новой логики расчёта нет.
+    """
+    fv = row.field(field_name)
+    events: list[TimelineEvent] = []
+
+    def add(ev: Evidence, role: str, value, note: str = "") -> None:
+        d = docs[ev.filename]
+        notes = [note] if note else []
+        if d.effective_date and d.effective_date != d.doc_date and role != ROLE_PENDING:
+            notes.append(f"в силе с {d.effective_date.strftime('%d.%m.%Y')}")
+        events.append(TimelineEvent(d.doc_date or d.effective_date, d, role, value, ev, "; ".join(notes)))
+
+    steps = fv.history or [Step(fv.value, fv.status, fv.evidence, "договор")]
+    for i, step in enumerate(steps):
+        if step.value is None and step.status is ValueStatus.REVIEW and fv.candidates:
+            continue  # конфликт: вместо пустого шага показываются кандидаты
+        if i < len(steps) - 1:
+            role = ROLE_WAS
+        else:
+            role = {ValueStatus.OK: ROLE_CURRENT, ValueStatus.REVIEW: ROLE_DOUBT}.get(fv.status, ROLE_NO_DATA)
+        for ev in step.evidence:
+            add(ev, role, step.value)
+    for value, ev in fv.candidates:
+        add(ev, ROLE_REVIEW, value)
+    for p in row.proposals_for(field_name):
+        add(p.evidence, ROLE_PENDING, p.value, p.kind.value + (f", {p.note}" if p.note else ""))
+    # По дате документа; события без даты — в конце. sorted() устойчив: порядок внутри даты сохраняется.
+    return sorted(events, key=lambda e: (e.date is None, e.date or date.min))

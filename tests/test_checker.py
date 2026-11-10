@@ -300,3 +300,45 @@ def test_doc_labels():
     }
     empty = next(d for d in run("tc20_encoding_empty").documents if d.filename == "empty.txt")
     assert doc_label(empty) == "empty.txt"  # нераспознанный документ — по имени файла
+
+
+# --- таймлайн поля в карточке договора --------------------------------------
+
+def _timeline(name, number, field):
+    from checker.queries import field_timeline
+    result = run(name)
+    row = {r.number: r for r in result.rows}[number]
+    return [(norm(e.date), e.document.filename, e.role, norm(e.value))
+            for e in field_timeline(row, field, {d.filename: d for d in result.documents})]
+
+
+def test_field_timeline():
+    assert _timeline("base", "STN-101", "amount") == [
+        ("05.02.2026", "01_contract.txt", "было", 1200000),
+        ("01.03.2026", "02_amendment_signed.txt", "действует", 1380000),
+        ("06.03.2026", "06_amendment_draft.txt", "не действует", 1450000),
+    ]
+    assert _timeline("base", "STN-102", "delivery") == [
+        ("10.02.2026", "03_contract.txt", "действует", "20.03.2026"),
+        ("05.03.2026", "05_supplier_email.txt", "не действует", "27.03.2026"),
+    ]
+    assert _timeline("base", "STN-103", "amount") == [("20.02.2026", "04_contract.txt", "нет данных", None)]
+    assert _timeline("a3_later_wins", "STN-101", "delivery") == [
+        ("05.02.2026", "01_contract.txt", "было", "15.04.2026"),
+        ("01.03.2026", "02_amendment_signed.txt", "было", "30.04.2026"),
+        ("05.03.2026", "00_amendment_3.txt", "действует", "20.05.2026"),
+    ]
+
+
+def test_field_timeline_review_cases():
+    conflict = _timeline("a3_conflict", "STN-101", "delivery")
+    assert conflict[0] == ("05.02.2026", "01_contract.txt", "было", "15.04.2026")
+    assert sorted(e[1:] for e in conflict[1:]) == [
+        ("02_amendment_signed.txt", "требует проверки", "30.04.2026"),
+        ("07_amendment_4.txt", "требует проверки", "25.04.2026"),
+    ]
+    assert _timeline("tc12_ambiguous_status", "STN-101", "amount") == [
+        ("05.02.2026", "01_contract.txt", "под вопросом", 1200000),
+        ("01.03.2026", "02_amendment_signed.txt", "требует проверки", 1380000),
+        ("06.03.2026", "06_amendment_draft.txt", "не действует", 1450000),
+    ]
