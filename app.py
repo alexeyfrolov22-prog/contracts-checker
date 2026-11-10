@@ -1,79 +1,96 @@
-"""Streamlit-интерфейс для закупщика. Логика извлечения — в пакете checker/."""
+"""Streamlit-интерфейс для закупщика. Логика извлечения — в пакете checker/.
+
+Макет: настройки и загрузка — в боковой панели; основной экран начинается с результатов:
+сводка → быстрый ответ → «требует внимания» → таблица договоров → карточка договора
+(значения слева, исходные тексты справа, переход к абзацу без ухода со страницы).
+"""
 from __future__ import annotations
 
 import html
-from datetime import date
+from datetime import date, timedelta
 
 import streamlit as st
+import streamlit.components.v1 as components
 
-from checker.models import Evidence, FieldValue, Proposal, Result, ValueStatus
-from checker.queries import FIELD_LABELS, deliveries_before, field_answer, fmt_value, group_documents
+from checker.models import (Document, Evidence, FieldValue, Proposal, Result, SignStatus,
+                            ValueStatus)
+from checker.queries import (FIELD_LABELS, deliveries_before, doc_label, field_answer, fmt_value,
+                             group_documents)
 from checker.resolver import check, fmt_date
 
 DEFAULT_CHECK_DATE = date(2026, 3, 10)
+ORPHANS = "Не привязаны к договору"
 
 FORMAT_HINT = """
-**Как распознаются документы.** Прототип работает на правилах, без LLM, и ищет признаки по всему тексту, а не по позиции строки:
-- **тип** — по заголовку в начале документа («договор поставки», «дополнительное соглашение», «проект … соглашения», «письмо»); письмо без заголовка — по признакам («Уважаемые», «просим», «От:/Кому:»);
+Прототип работает на правилах, без LLM, и ищет признаки по всему тексту:
+- **тип** — по заголовку («договор поставки», «дополнительное соглашение», «проект … соглашения», «письмо»); письмо без заголовка — по признакам («Уважаемые», «просим», «От:/Кому:»);
 - **номер договора** — после «договор №», «к договору», «по договору», в любом формате (`STN-101`, `45/2026`);
-- **статус** — строка «Статус:» или фраза в тексте («подписан(о) обеими сторонами», «проект», «не подписан»); подпись одной стороной или противоречивые признаки → «требует проверки»;
+- **статус** — строка «Статус:» или фраза в тексте («подписан(о) обеими сторонами», «проект», «не подписан»);
 - **вступление ДС в силу** — «вступает в силу ДД.ММ.ГГГГ» или «с даты подписания»;
-- **даты** — `ДД.ММ.ГГГГ` или «15 апреля 2026 г.»; **суммы** — цифрами с «руб.», «рублей», «₽» или «RUB».
+- **даты** — `ДД.ММ.ГГГГ` или «15 апреля 2026 г.»; **суммы** — цифрами с «руб.», «₽» или «RUB».
 
-Ограничения: только TXT (UTF-8 или cp1251); срок «в течение N дней» не пересчитывается в дату; сумма в иностранной валюте и цена в спецификации не извлекаются. Если признак не найден, значение не подставляется: документ получает предупреждение или статус «требует проверки».
+Не распознаётся: срок «в течение N дней» (→ «требует проверки»), валюта, цена в спецификации, PDF/DOCX.
 """
+RULE = ("Условия меняет только дополнительное соглашение, **подписанное обеими сторонами и вступившее "
+        "в силу** к дате проверки. Проекты, письма и ещё не вступившие ДС показываются как «не действует». "
+        "Имя файла и порядок загрузки на приоритет не влияют.")
+
+# --- единая система статусов --------------------------------------------------
+
+STATUS = {
+    ValueStatus.OK: ("✅", "подтверждено", "s-ok"),
+    ValueStatus.REVIEW: ("⚠️", "требует проверки", "s-rv"),
+    ValueStatus.NO_DATA: ("∅", "нет данных", "s-nd"),
+}
+PENDING = ("⏳", "не действует", "s-pd")
+DOC_STATUS = {
+    SignStatus.SIGNED: ("✅", "подписан", "s-ok"),
+    SignStatus.DRAFT: ("⏳", "проект", "s-pd"),
+    SignStatus.PROPOSAL: ("⏳", "предложение", "s-pd"),
+    SignStatus.UNKNOWN: ("⚠️", "статус не распознан", "s-rv"),
+}
 
 CSS = """
 <style>
-.src-p {padding: 2px 8px; border-left: 3px solid transparent; white-space: pre-wrap;
-        font-family: ui-monospace, monospace; font-size: .9rem; scroll-margin-top: 90px;}
-.src-p .pn {opacity: .55; margin-right: .6em; user-select: none;}
-.src-p.ref {background: rgba(255, 200, 0, .16); border-left-color: #e0a800;}
-.src-p:target {background: rgba(255, 120, 0, .38); border-left-color: #e05500;}
-.quote {border-left: 3px solid #999; padding: 2px 10px; margin: 4px 0 8px 0; opacity: .9;}
-.badge {display: inline-block; padding: 0 6px; border-radius: 4px; font-size: .8rem;}
-.b-ok {background: rgba(0, 160, 80, .18);} .b-nd {background: rgba(130, 130, 130, .25);}
-.b-rv {background: rgba(230, 60, 30, .22);}
-table.grp {width: 100%; border-collapse: collapse; font-size: .9rem;}
-table.grp th, table.grp td {padding: 5px 8px; border-bottom: 1px solid rgba(128, 128, 128, .25);
-                            text-align: left; vertical-align: top;}
-table.grp th {font-weight: 600; opacity: .8;}
-table.grp tr.g-contract td {background: rgba(70, 130, 220, .14); font-weight: 600;
-                            border-top: 2px solid rgba(70, 130, 220, .55);}
-table.grp tr.g-orphan td {background: rgba(230, 60, 30, .12); font-weight: 600;
-                          border-top: 2px solid rgba(230, 60, 30, .5);}
-table.grp tr.g-doc td {font-weight: 400;}
-details.src-grp {border: 1px solid rgba(70, 130, 220, .45); border-radius: 6px; margin: 10px 0; padding: 4px 10px;}
-details.src-grp.orphan {border-color: rgba(230, 60, 30, .5);}
-details.src-grp > summary {font-weight: 600; font-size: 1.05rem; cursor: pointer; padding: 4px 0;}
-details.src-doc {margin: 6px 0 6px 14px;}
-details.src-doc > summary {cursor: pointer; padding: 2px 0;}
-details.src-doc > summary .meta {opacity: .65; font-weight: 400;}
-table.grp td:first-child, table.grp td:nth-child(5), table.grp td:nth-child(6),
-table.grp td:nth-child(4) {white-space: nowrap;}
-table.grp tr.g-doc td:first-child {padding-left: 28px;}
-table.grp tr.g-doc td:first-child::before {content: "└ "; opacity: .5;}
+.badge {display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: .78rem; font-weight: 500;
+        vertical-align: middle; white-space: nowrap;}
+.s-ok {background: rgba(0, 160, 80, .16);} .s-rv {background: rgba(230, 60, 30, .18);}
+.s-nd {background: rgba(130, 130, 130, .22);} .s-pd {background: rgba(230, 170, 0, .22);}
+.muted {opacity: .65;} .small {font-size: .82rem;}
+.ans-q {opacity: .7; font-size: .9rem;}
+.ans-v {font-size: 2rem; font-weight: 700; line-height: 1.2; margin: 2px 0 6px 0;}
+.fld {margin-bottom: 20px;}
+.fld-h {opacity: .65; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em;}
+.fld-v {font-size: 1.35rem; font-weight: 650; margin: 2px 0 4px 0;}
+.quote {border-left: 3px solid rgba(128, 128, 128, .6); padding: 2px 10px; margin: 3px 0 8px 0; font-size: .9rem;
+        white-space: pre-wrap;}
+.pend {border-left: 3px solid rgba(230, 170, 0, .8); padding: 2px 10px; margin: 6px 0;}
+.src-p {padding: 2px 8px; border-left: 3px solid transparent; white-space: pre-wrap; font-size: .86rem;
+        font-family: ui-monospace, monospace; scroll-margin-top: 20px;}
+.src-p .pn {opacity: .5; margin-right: .6em; user-select: none;}
+.src-p.ref {background: rgba(255, 200, 0, .15); border-left-color: #e0a800;}
+.src-p.focus, .src-p:target {background: rgba(255, 120, 0, .36); border-left-color: #e05500;}
+details.src-doc {margin: 4px 0 10px 0;}
+details.src-doc > summary {cursor: pointer; font-weight: 600; padding: 3px 0;}
+.legend div {margin: 3px 0;}
 </style>
 """
 
-STATUS_BADGE = {ValueStatus.OK: ("b-ok", "подтверждено"), ValueStatus.NO_DATA: ("b-nd", "нет данных"),
-                ValueStatus.REVIEW: ("b-rv", "требует проверки")}
+
+def badge(icon: str, text: str, cls: str) -> str:
+    return f'<span class="badge {cls}">{icon} {html.escape(text)}</span>'
 
 
-# --- вспомогательные функции разметки --------------------------------------
-
-def anchor(ev: Evidence, doc_index: dict[str, int]) -> str:
-    return f"src-{doc_index[ev.filename]}-p{ev.paragraph}"
+def value_badge(status: ValueStatus) -> str:
+    return badge(*STATUS[status])
 
 
-def ev_html(ev: Evidence, doc_index: dict[str, int]) -> str:
-    return (f'<a href="#{anchor(ev, doc_index)}">📄 {html.escape(ev.label)}</a>'
-            f'<div class="quote">{html.escape(ev.quote)}</div>')
-
-
-def badge(status: ValueStatus) -> str:
-    cls, text = STATUS_BADGE[status]
-    return f'<span class="badge {cls}">{text}</span>'
+def value_with_badge(value, status: ValueStatus) -> str:
+    """Значение и бейдж статуса; для «нет данных» бейдж не повторяет текст значения."""
+    text = html.escape(shown(value, status))
+    if status is ValueStatus.NO_DATA:
+        return f'<span class="muted">∅ {text}</span>'
+    return f"{text} {value_badge(status)}"
 
 
 def shown(value, status: ValueStatus) -> str:
@@ -84,193 +101,304 @@ def shown(value, status: ValueStatus) -> str:
 
 
 def cell(fv: FieldValue) -> str:
-    text = fmt_value(fv.value)
-    if fv.status is ValueStatus.REVIEW:
-        return f"⚠ {text} — требует проверки" if fv.value is not None else "⚠ требует проверки"
-    return text
+    return f"{STATUS[fv.status][0]} {shown(fv.value, fv.status)}"
 
 
-def field_html(name: str, fv: FieldValue, proposals: list[Proposal], doc_index: dict[str, int]) -> str:
-    parts = [f"<b>{FIELD_LABELS[name]}: {html.escape(shown(fv.value, fv.status))}</b> {badge(fv.status)}"]
-    if fv.note:
-        parts.append(f"<div><i>{html.escape(fv.note)}</i></div>")
-    if fv.evidence:
-        parts.append("<div>Основание:</div>" + "".join(ev_html(e, doc_index) for e in fv.evidence))
-    elif fv.status is ValueStatus.NO_DATA:
-        parts.append("<div>Основание: подходящий пункт в тексте не найден.</div>")
-    if fv.changed:
-        chain = " → ".join(
-            f"{html.escape(shown(s.value, s.status))} ({s.source}: "
-            + (", ".join(f'<a href="#{anchor(e, doc_index)}">{html.escape(e.label)}</a>' for e in s.evidence) or "—")
-            + ")" for s in fv.history)
-        parts.append(f"<div>История изменений: {chain}</div>")
-    if fv.candidates:
-        parts.append("<div>Кандидаты для ручной проверки:</div>" + "".join(
-            f"<div>• {html.escape(fmt_value(v))}</div>{ev_html(e, doc_index)}" for v, e in fv.candidates))
-    for p in proposals:
+# --- контекст отрисовки -------------------------------------------------------
+
+class View:
+    """Документы по имени файла, якоря абзацев и множество абзацев-оснований для подсветки."""
+
+    def __init__(self, result: Result):
+        self.result = result
+        self.docs = {d.filename: d for d in result.documents}
+        self.index = {d.filename: i for i, d in enumerate(result.documents)}
+        self.refs: set[str] = set()
+        for row in result.rows:
+            for f in ("supplier", "amount", "delivery"):
+                fv = row.field(f)
+                for e in fv.evidence + [e for _, e in fv.candidates] + [e for s in fv.history for e in s.evidence]:
+                    self.refs.add(self.anchor(e))
+            self.refs |= {self.anchor(p.evidence) for p in row.proposals}
+
+    def anchor(self, ev: Evidence) -> str:
+        return f"src-{self.index[ev.filename]}-p{ev.paragraph}"
+
+    def ev_label(self, ev: Evidence) -> str:
+        where = f"п. {ev.clause}" if ev.clause else f"абзац {ev.paragraph}"
+        return f"{doc_label(self.docs[ev.filename])}, {where}"
+
+    def ev_html(self, ev: Evidence, link: bool = True) -> str:
+        label = html.escape(self.ev_label(ev))
+        head = f'<a href="#{self.anchor(ev)}">📄 {label}</a>' if link else f"📄 {label}"
+        return (f'{head} <span class="muted small">{html.escape(ev.filename)}</span>'
+                f'<div class="quote">{html.escape(ev.quote)}</div>')
+
+    def excerpt_html(self, ev: Evidence, around: int = 2) -> str:
+        """Абзац-основание в контексте соседних абзацев — для проверки прямо в ответе."""
+        doc = self.docs[ev.filename]
+        lo, hi = max(1, ev.paragraph - around), min(len(doc.paragraphs), ev.paragraph + around)
+        rows = []
+        for p in doc.paragraphs[lo - 1:hi]:
+            cls = "src-p focus" if p.index == ev.paragraph else "src-p"
+            rows.append(f'<div class="{cls}"><span class="pn">{p.index}</span>{html.escape(p.text)}</div>')
+        return f'<div class="small muted">{html.escape(doc_label(doc))} · {html.escape(doc.filename)}</div>' + "".join(rows)
+
+    def proposal_html(self, p: Proposal, link: bool = True) -> str:
         extra = f", {p.note}" if p.note else ""
-        parts.append(f"<div>⏳ <b>Не действует</b> ({p.kind.value}{html.escape(extra)}): "
-                     f"{html.escape(fmt_value(p.value))}</div>{ev_html(p.evidence, doc_index)}")
-    return "<div style='margin-bottom:14px'>" + "".join(parts) + "</div>"
+        return (f'<div class="pend">{badge(*PENDING)} <b>{html.escape(fmt_value(p.value))}</b> '
+                f'<span class="muted">— {html.escape(p.kind.value + extra)}</span><br>{self.ev_html(p.evidence, link)}</div>')
 
+    def field_html(self, name: str, fv: FieldValue, proposals: list[Proposal]) -> str:
+        parts = [f'<div class="fld"><div class="fld-h">{FIELD_LABELS[name]}</div>'
+                 f'<div class="fld-v">{value_with_badge(fv.value, fv.status)}</div>']
+        if fv.note:
+            parts.append(f'<div class="small"><i>{html.escape(fv.note)}</i></div>')
+        if fv.evidence:
+            parts.append("".join(self.ev_html(e) for e in fv.evidence))
+        elif fv.status is ValueStatus.NO_DATA:
+            parts.append('<div class="small muted">Подходящий пункт в тексте не найден.</div>')
+        if fv.changed:
+            chain = " → ".join(
+                f"<b>{html.escape(shown(s.value, s.status))}</b> ("
+                + ", ".join(f'<a href="#{self.anchor(e)}">{html.escape(self.ev_label(e))}</a>' for e in s.evidence)
+                + f"{'; ' + html.escape(s.source) if s.source != 'договор' else ''})" for s in fv.history)
+            parts.append(f'<div class="small">История: {chain}</div>')
+        if fv.candidates:
+            parts.append('<div class="small">Кандидаты для ручной проверки:</div>' + "".join(
+                f"<div>• <b>{html.escape(fmt_value(v))}</b></div>{self.ev_html(e)}" for v, e in fv.candidates))
+        parts += [self.proposal_html(p) for p in proposals]
+        return "".join(parts) + "</div>"
 
-def source_html(result: Result, doc_index: dict[str, int]) -> dict[str, str]:
-    refs: set[str] = set()
-    for row in result.rows:
-        for f in ("supplier", "amount", "delivery"):
-            fv = row.field(f)
-            refs |= {anchor(e, doc_index) for e in fv.evidence + [e for _, e in fv.candidates]
-                     + [e for step in fv.history for e in step.evidence]}
-        refs |= {anchor(p.evidence, doc_index) for p in row.proposals}
-    out = {}
-    for doc in result.documents:
-        lines = []
-        for p in doc.paragraphs:
-            aid = f"src-{doc_index[doc.filename]}-p{p.index}"
-            cls = "src-p ref" if aid in refs else "src-p"
-            lines.append(f'<div id="{aid}" class="{cls}"><span class="pn">{p.index}</span>'
-                         f'{html.escape(p.text)}</div>')
-        out[doc.filename] = "".join(lines) or "<i>файл пустой</i>"
-    return out
-
-
-GROUP_COLUMNS = ["Договор / документ", "Поставщик / тип документа", "Статус документа", "Вступает в силу",
-                 "Сумма, ₽ (с НДС)", "Срок поставки", "Изменено документом",
-                 "Несогласованные изменения / замечания"]
-
-
-def grouped_table_html(result: Result, doc_index: dict[str, int]) -> str:
-    """Одна таблица: строка договора с итоговыми значениями, под ней — относящиеся к нему файлы."""
-    esc = html.escape
-    orphan_reason = {o.document.filename: o.reason for o in result.orphans}
-
-    def tr(cls: str, cells: list[str]) -> str:
-        return f'<tr class="{cls}">' + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
-
-    rows = ["<table class='grp'><thead><tr>" + "".join(f"<th>{c}</th>" for c in GROUP_COLUMNS)
-            + "</tr></thead><tbody>"]
-    for row, docs in group_documents(result):
-        if row is not None:
-            changed_by = sorted({e.filename for f in ("amount", "delivery")
-                                 if row.field(f).changed for e in row.field(f).evidence})
-            pending = "; ".join(f"{FIELD_LABELS[p.field].lower()} → {fmt_value(p.value)} ({p.kind.value})"
-                                for p in row.proposals)
-            rows.append(tr("g-contract", [
-                esc(row.number), esc(cell(row.supplier)), "", "", esc(cell(row.amount)),
-                esc(cell(row.delivery)), esc(", ".join(changed_by) or "—"), esc(pending or "—")]))
-        else:
-            rows.append(tr("g-orphan", ["Не привязаны к договору", "", "", "", "", "", "", ""]))
+    def sources_html(self, docs: list[Document], focus: str | None) -> str:
+        out = []
         for d in docs:
-            notes = [orphan_reason[d.filename]] if d.filename in orphan_reason else []
-            notes += [w for w in d.warnings if w not in notes]
-            link = f'<a href="#src-{doc_index[d.filename]}-p1">{esc(d.filename)}</a>' if d.paragraphs else esc(d.filename)
-            rows.append(tr("g-doc", [
-                link, esc(d.doc_type.value), esc(d.status.value), esc(fmt_date(d.effective_date)),
-                "", "", "", esc("; ".join(notes) or "—")]))
-    rows.append("</tbody></table>")
-    return "".join(rows)
+            body = []
+            for p in d.paragraphs:
+                aid = f"src-{self.index[d.filename]}-p{p.index}"
+                cls = "src-p" + (" ref" if aid in self.refs else "") + (" focus" if aid == focus else "")
+                body.append(f'<div id="{aid}" class="{cls}"><span class="pn">{p.index}</span>{html.escape(p.text)}</div>')
+            out.append(f'<details open class="src-doc"><summary>{html.escape(doc_label(d))} '
+                       f'{badge(*DOC_STATUS[d.status])} <span class="muted small">{html.escape(d.filename)}</span>'
+                       f'</summary>{"".join(body) or "<i>файл пустой</i>"}</details>')
+        return "".join(out)
 
 
-def sources_grouped_html(result: Result, doc_index: dict[str, int]) -> str:
-    """Исходные тексты, сгруппированные как таблица: договор → его файлы, в конце — не привязанные.
-    Группы — <details open>: их можно свернуть; переход по якорю на абзац раскрывает блок."""
-    bodies = source_html(result, doc_index)
-    out = []
-    for row, docs in group_documents(result):
-        if row is not None:
-            title, cls = f"{row.number} — {row.supplier.value or 'поставщик не указан'}", "src-grp"
-        else:
-            title, cls = "Не привязаны к договору", "src-grp orphan"
-        inner = "".join(
-            f'<details open class="src-doc"><summary>📄 <b>{html.escape(d.filename)}</b> '
-            f'<span class="meta">· {html.escape(d.doc_type.value)} · {html.escape(d.status.value)}</span>'
-            f'</summary>{bodies[d.filename]}</details>' for d in docs)
-        out.append(f'<details open class="{cls}"><summary>{html.escape(title)}</summary>{inner}</details>')
-    return "".join(out)
+def doc_name(d: Document) -> str:
+    """«ДС № 1 от 01.03.2026 (02_amendment_signed.txt)»; имя файла не повторяется, если оно и есть название."""
+    label = doc_label(d)
+    return label if label == d.filename else f"{label} ({d.filename})"
 
 
-# --- страница ----------------------------------------------------------------
+def open_card(target: str, focus: str | None = None) -> None:
+    st.session_state.card = target
+    st.session_state.focus = focus
+    st.session_state.scroll = True
 
-st.set_page_config(page_title="Проверка договоров поставки", page_icon="📑", layout="wide")
+
+# --- боковая панель -------------------------------------------------------------
+
+st.set_page_config(page_title="Проверка договоров поставки", page_icon="📑", layout="wide",
+                   initial_sidebar_state="expanded")
 st.markdown(CSS, unsafe_allow_html=True)
-st.title("Проверка условий договоров поставки")
-st.caption("Сумма и срок поставки по состоянию на дату проверки. У каждого значения указаны источник, "
-           "цитата и ссылка на абзац исходного текста.")
 
-check_date = st.date_input("Дата проверки", DEFAULT_CHECK_DATE, format="DD.MM.YYYY")
-st.info(FORMAT_HINT, icon="ℹ️")
-with st.expander("Правило учёта изменений", expanded=False):
-    st.markdown("**Правило.** Условия меняет только дополнительное соглашение, подписанное обеими "
-                "сторонами и вступившее в силу к дате проверки. Проекты, письма и ДС, которые ещё не "
-                "вступили в силу, показываются отдельно. Имя файла и порядок загрузки на приоритет не влияют.")
+with st.sidebar:
+    st.markdown("### 📑 Проверка договоров поставки")
+    check_date = st.date_input("Дата проверки", DEFAULT_CHECK_DATE, format="DD.MM.YYYY")
+    uploaded = st.file_uploader("Документы (TXT)", type=["txt"], accept_multiple_files=True,
+                                help="Договоры, доп. соглашения, проекты и письма. Порядок и имена файлов не важны.")
+    st.markdown('<div class="legend small"><b>Статусы</b>'
+                f'<div>{badge(*STATUS[ValueStatus.OK])} значение из действующих документов</div>'
+                f'<div>{badge(*STATUS[ValueStatus.REVIEW])} надёжно определить нельзя</div>'
+                f'<div>{badge(*STATUS[ValueStatus.NO_DATA])} в документах значения нет</div>'
+                f'<div>{badge(*PENDING)} проект, письмо или ДС не в силе</div></div>',
+                unsafe_allow_html=True)
+    with st.expander("Правило учёта изменений"):
+        st.markdown(RULE)
+    with st.expander("Как распознаются документы"):
+        st.markdown(FORMAT_HINT)
 
-uploaded = st.file_uploader("Загрузите TXT-файлы: договоры, доп. соглашения, письма, проекты",
-                            type=["txt"], accept_multiple_files=True)
 if not uploaded:
-    st.info("Загрузите один или несколько TXT-файлов.")
+    st.title("Условия договоров поставки")
+    st.info("Загрузите TXT-файлы в панели слева: договоры, дополнительные соглашения, проекты и письма поставщиков.")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("**1. Сводка**  \nСумма и срок поставки по каждому договору на дату проверки.")
+    c2.markdown("**2. Ответ на вопрос**  \nСрок или сумма по договору, поставки раньше даты.")
+    c3.markdown("**3. Проверка**  \nКаждое значение — с цитатой и абзацем исходного документа.")
     st.stop()
 
 result = check([(f.name, f.getvalue()) for f in uploaded], check_date)
-doc_index = {d.filename: i for i, d in enumerate(result.documents)}
+view = View(result)
+rows = {r.number: r for r in result.rows}
+numbers = list(rows)
+docs_of = {r.number: d for r, d in group_documents(result) if r is not None}  # документы договора в порядке показа
 
-# Предупреждения по документам
-for d in result.documents:
-    for w in d.warnings:
-        st.warning(f"**{d.filename}**: {w}")
+# --- 1. сводка ----------------------------------------------------------------------
 
-# 1. Договоры и относящиеся к ним документы
-st.header(f"Договоры на {fmt_date(check_date)}")
-st.caption("Строка договора — итоговые значения на дату проверки. Под ней — загруженные файлы, которые к нему "
-           "относятся (привязка по номеру договора). Имя файла ведёт к его тексту.")
-if not result.rows:
-    st.info("Договоры не найдены среди загруженных файлов.")
-st.markdown(grouped_table_html(result, doc_index), unsafe_allow_html=True)
+st.title(f"Условия договоров на {fmt_date(check_date)}")
+fields = [row.field(f) for row in result.rows for f in ("amount", "delivery")]
+count = lambda s: sum(fv.status is s for fv in fields)
+k = st.columns(6)
+k[0].metric("Договоров", len(result.rows))
+k[1].metric("✅ Подтверждено", f"{count(ValueStatus.OK)} из {len(fields)}",
+            help="Значений суммы и срока, подтверждённых действующими документами")
+k[2].metric("⚠️ Требует проверки", count(ValueStatus.REVIEW))
+k[3].metric("∅ Нет данных", count(ValueStatus.NO_DATA))
+k[4].metric("⏳ Не действует", sum(len(r.proposals) for r in result.rows),
+            help="Изменения из проектов, писем и ещё не вступивших ДС")
+k[5].metric("Без договора", len(result.orphans), help="Файлы, которые не удалось привязать к договору")
 
-# 2. Вопросы
-st.header("Вопросы")
-tab_field, tab_date = st.tabs(["Сумма или срок по договору", "Поставки раньше даты"])
-with tab_field:
-    numbers = [r.number for r in result.rows]
-    if numbers:
-        c1, c2 = st.columns(2)
-        number = c1.selectbox("Договор", numbers)
-        fname = c2.radio("Поле", ["delivery", "amount"], format_func=lambda f: FIELD_LABELS[f], horizontal=True)
-        ans = field_answer(result, number, fname)
-        verb = "действует" if fname == "delivery" else "составляет"
-        st.markdown(f"**{FIELD_LABELS[fname]} по договору {number} на {fmt_date(check_date)} {verb}: "
-                    f"{shown(ans.value.value, ans.value.status)}**")
-        st.markdown(field_html(fname, ans.value, ans.proposals, doc_index), unsafe_allow_html=True)
-with tab_date:
-    before = st.date_input("Срок поставки раньше", date(2026, 4, 1), format="DD.MM.YYYY")
+# --- 2. быстрый ответ ---------------------------------------------------------------
+
+st.subheader("Быстрый ответ")
+QUESTIONS = {"Срок поставки": "delivery", "Сумма договора": "amount", "Поставки раньше даты": "before"}
+qtype = st.pills("Вопрос", list(QUESTIONS), default="Срок поставки", key="qtype")
+if qtype and QUESTIONS[qtype] in ("delivery", "amount") and numbers:
+    fname = QUESTIONS[qtype]
+    number = st.pills("Договор", numbers, default=numbers[0], key="q_contract_" + "|".join(numbers)) or numbers[0]
+    ans = field_answer(result, number, fname)
+    fv = ans.value
+    with st.container(border=True):
+        what = "Срок поставки" if fname == "delivery" else "Сумма"
+        st.markdown(f'<div class="ans-q">{what} по договору {html.escape(number)} на {fmt_date(check_date)}</div>'
+                    f'<div class="ans-v">{value_with_badge(fv.value, fv.status)}</div>', unsafe_allow_html=True)
+        if fv.changed and fv.status is ValueStatus.OK:
+            last = fv.history[-1]
+            why = (f"Изменено: {view.ev_label(last.evidence[0])} ({last.source.removeprefix('ДС, ')}). "
+                   f"По договору было {shown(fv.history[0].value, fv.history[0].status)}.")
+        elif fv.status is ValueStatus.OK:
+            why = f"По тексту: {view.ev_label(fv.evidence[0])}."
+        else:
+            why = fv.note
+        st.markdown(f"<div>{html.escape(why)}</div>", unsafe_allow_html=True)
+        if fv.evidence:
+            st.markdown(view.ev_html(fv.evidence[0], link=False), unsafe_allow_html=True)
+        for p in ans.proposals:
+            st.markdown(view.proposal_html(p, link=False), unsafe_allow_html=True)
+        b1, b2 = st.columns([1, 3])
+        focus = view.anchor(fv.evidence[0]) if fv.evidence else None
+        b1.button("Открыть в документе", key="ans_open", on_click=open_card, args=(number, focus),
+                  type="primary", use_container_width=True)
+        if fv.evidence:
+            with b2.expander("Показать абзац в контексте"):
+                st.markdown(view.excerpt_html(fv.evidence[0]), unsafe_allow_html=True)
+elif qtype and QUESTIONS[qtype] == "before":
+    nxt = (check_date.replace(day=1) + timedelta(days=32)).replace(day=1)  # 1-е число следующего месяца
+    before = st.date_input("Срок поставки раньше", nxt, format="DD.MM.YYYY")
     q = deliveries_before(result, before)
-    if q.matches:
+    with st.container(border=True):
+        st.markdown(f'<div class="ans-q">Поставка раньше {fmt_date(before)}</div>'
+                    f'<div class="ans-v">{len(q.matches)} {"договор" if len(q.matches) == 1 else "договора(ов)"}</div>',
+                    unsafe_allow_html=True)
         for row, props in q.matches:
-            flag = (" — ⚠ есть несогласованные изменения срока: " +
-                    "; ".join(f"{fmt_value(p.value)} ({p.kind.value}, {p.evidence.filename})" for p in props)
-                    if props else " — несогласованных изменений срока нет")
-            st.markdown(f"**{row.number}** ({row.supplier.value}): {fmt_value(row.delivery.value)}{flag}")
-            st.markdown(field_html("delivery", row.delivery, props, doc_index), unsafe_allow_html=True)
-    else:
-        st.markdown(f"Договоров со сроком поставки раньше {fmt_date(before)} нет.")
-    if q.review:
-        st.warning("Срок не установлен надёжно, нужна ручная проверка: " + ", ".join(r.number for r in q.review))
-    others = [p for p in q.all_pending if p.contract_number not in {r.number for r, _ in q.matches}]
-    if others:
-        st.markdown("Несогласованные изменения срока по другим договорам: " + "; ".join(
-            f"{p.contract_number} → {fmt_value(p.value)} ({p.kind.value})" for p in others))
+            c1, c2 = st.columns([5, 1])
+            flag = ("".join(view.proposal_html(p, link=False) for p in props) if props
+                    else '<div class="small muted">Несогласованных изменений срока нет.</div>')
+            c1.markdown(f"<b>{html.escape(row.number)}</b> · {html.escape(row.supplier.value or '')} · "
+                        f"<b>{fmt_value(row.delivery.value)}</b> {value_badge(row.delivery.status)}{flag}",
+                        unsafe_allow_html=True)
+            c2.button("Открыть", key=f"q4_{row.number}", on_click=open_card,
+                      args=(row.number, view.anchor(row.delivery.evidence[0])))
+        if q.review:
+            st.markdown(badge(*STATUS[ValueStatus.REVIEW]) + " срок не установлен надёжно: "
+                        + ", ".join(html.escape(r.number) for r in q.review), unsafe_allow_html=True)
+        matched = {r.number for r, _ in q.matches}
+        others = [p for p in q.all_pending if p.contract_number not in matched]
+        if others:
+            st.caption("Несогласованные изменения срока по другим договорам: " + "; ".join(
+                f"{p.contract_number} → {fmt_value(p.value)} ({p.kind.value})" for p in others))
 
-# 3. Основания
-st.header("Основания по договорам")
+# --- 3. требует внимания --------------------------------------------------------------
+
+attention: list[tuple[str, str, str | None]] = []   # (текст, куда открыть, якорь)
 for row in result.rows:
-    with st.expander(f"{row.number} — {row.supplier.value or 'поставщик не указан'}"):
-        for w in row.warnings:
-            st.warning(w)
-        st.markdown(field_html("supplier", row.supplier, [], doc_index), unsafe_allow_html=True)
-        for f in ("amount", "delivery"):
-            st.markdown(field_html(f, row.field(f), row.proposals_for(f), doc_index), unsafe_allow_html=True)
+    for f in ("amount", "delivery"):
+        fv = row.field(f)
+        if fv.status is not ValueStatus.OK:
+            icon, word, _ = STATUS[fv.status]
+            attention.append((f"{icon} **{row.number}** · {FIELD_LABELS[f].lower()} — {word}: {fv.note}",
+                              row.number, view.anchor(fv.evidence[0]) if fv.evidence else None))
+    attention += [(f"⚠️ **{row.number}** · {w}", row.number, None) for w in row.warnings]
+orphan_names = {o.document.filename for o in result.orphans}
+for o in result.orphans:
+    attention.append((f"⚠️ **{doc_name(o.document)}** — {o.reason}", ORPHANS, None))
+for d in result.documents:
+    if d.filename not in orphan_names:
+        attention += [(f"ℹ️ **{doc_name(d)}** — {w}", d.contract_number, None) for w in d.warnings]
+if attention:
+    st.subheader("Требует внимания")
+    with st.container(border=True):
+        for i, (text, target, focus) in enumerate(attention):
+            c1, c2 = st.columns([6, 1])
+            c1.markdown(text)
+            if target:
+                c2.button("Открыть", key=f"att_{i}", on_click=open_card, args=(target, focus))
 
-# 4. Исходные тексты
-st.header("Исходные тексты")
-st.caption("Сгруппированы по договорам, как в таблице. Абзацы, на которые ссылаются значения, подсвечены; "
-           "ссылка 📄 прокручивает к нужному абзацу. Группы и файлы можно свернуть кликом по заголовку.")
-st.markdown(sources_grouped_html(result, doc_index), unsafe_allow_html=True)
+# --- 4. договоры ----------------------------------------------------------------------
+
+st.subheader("Договоры")
+if result.rows:
+    table = [{
+        "Договор": r.number,
+        "Поставщик": r.supplier.value or "—",
+        "Сумма": cell(r.amount),
+        "Срок поставки": cell(r.delivery),
+        "Изменено": ", ".join(sorted({doc_label(view.docs[e.filename]) for f in ("amount", "delivery")
+                                      if r.field(f).changed for e in r.field(f).evidence})) or "—",
+        "Не действует": f"⏳ {len(r.proposals)}" if r.proposals else "—",
+        "Документы": " · ".join(f"{DOC_STATUS[d.status][0]} {doc_label(d)}" for d in docs_of[r.number]),
+    } for r in result.rows]
+    event = st.dataframe(table, hide_index=True, use_container_width=True, on_select="rerun",
+                         selection_mode="single-row", key="contracts_table",
+                         column_config={"Документы": st.column_config.TextColumn(width="large")})
+    st.caption("Выберите строку, чтобы открыть карточку договора с основаниями и исходными текстами.")
+    sel = event.selection.rows
+    if sel and st.session_state.get("table_sel") != sel:
+        st.session_state.table_sel = sel
+        open_card(result.rows[sel[0]].number)
+else:
+    st.info("Договоры среди загруженных файлов не найдены.")
+
+# --- 5. карточка договора ----------------------------------------------------------
+
+options = numbers + ([ORPHANS] if result.orphans else [])
+if options:
+    st.markdown('<div id="card"></div>', unsafe_allow_html=True)
+    st.subheader("Карточка договора")
+    current = st.session_state.get("card")
+    target = st.selectbox("Договор", options, index=options.index(current) if current in options else 0,
+                          format_func=lambda n: n if n == ORPHANS else f"{n} — {rows[n].supplier.value or ''}",
+                          label_visibility="collapsed")
+    if target != current:
+        st.session_state.card, st.session_state.focus = target, None
+    focus = st.session_state.get("focus")
+    left, right = st.columns([1, 1], gap="large")
+    if target == ORPHANS:
+        docs = [o.document for o in result.orphans]
+        with left:
+            for o in result.orphans:
+                st.markdown(f"⚠️ **{doc_name(o.document)}** — {o.reason}")
+    else:
+        row = rows[target]
+        docs = docs_of[target]
+        with left:
+            for w in row.warnings:
+                st.warning(w)
+            for f in ("supplier", "amount", "delivery"):
+                proposals = row.proposals_for(f) if f != "supplier" else []
+                st.markdown(view.field_html(f, row.field(f), proposals), unsafe_allow_html=True)
+    with right:
+        st.markdown('<div class="small muted">Документы договора. Подсвечены абзацы-основания; '
+                    'ссылка 📄 слева прокручивает эту панель.</div>', unsafe_allow_html=True)
+        with st.container(height=620):
+            st.markdown(view.sources_html(docs, focus), unsafe_allow_html=True)
+
+    if st.session_state.pop("scroll", False):
+        # Прокрутить к карточке и к нужному абзацу внутри панели документов.
+        components.html(f"""<script>
+            setTimeout(() => {{
+              const d = window.parent.document;
+              const card = d.getElementById("card"); if (card) card.scrollIntoView({{behavior: "smooth"}});
+              const t = d.getElementById("{focus or ''}");
+              if (t) setTimeout(() => t.scrollIntoView({{block: "center", behavior: "smooth"}}), 400);
+            }}, 250);</script>""", height=0)

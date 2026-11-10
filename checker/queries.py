@@ -1,6 +1,7 @@
 """Ответы на вопросы пользователя. Вопросы параметризованы: ответы вычисляются из Result."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -75,3 +76,20 @@ def group_documents(result: Result) -> list[tuple[Optional[ContractRow], list[Do
     if result.orphans:
         groups.append((None, sorted((o.document for o in result.orphans), key=_doc_key)))
     return groups
+
+
+_AMENDMENT_NO = re.compile(r"соглашени\w*\s+№\s*([\w./-]+)", re.IGNORECASE)
+
+
+def doc_label(d: Document) -> str:
+    """Человекочитаемое название: «ДС № 1 от 01.03.2026», «Письмо от 05.03.2026». Имя файла — запасной вариант."""
+    when = f" от {d.doc_date.strftime('%d.%m.%Y')}" if d.doc_date else ""
+    if d.doc_type is DocType.CONTRACT:
+        return f"Договор{' № ' + d.contract_number if d.contract_number else ''}{when}"
+    if d.doc_type in (DocType.AMENDMENT, DocType.DRAFT):
+        m = _AMENDMENT_NO.search(d.title)
+        name = ("Проект ДС" if d.doc_type is DocType.DRAFT else "ДС") + (f" № {m.group(1)}" if m else "")
+        return name + when
+    if d.doc_type is DocType.LETTER:
+        return "Письмо" + when
+    return d.filename

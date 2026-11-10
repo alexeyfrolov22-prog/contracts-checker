@@ -284,3 +284,19 @@ def test_effective_from_signing_date():
 ])
 def test_find_dates(text, expected):
     assert find_dates(text) == expected
+
+
+def test_doc_labels():
+    """Человекочитаемые названия документов для интерфейса."""
+    from checker.queries import doc_label
+    labels = {d.filename: doc_label(d) for d in run("base").documents}
+    assert labels == {
+        "01_contract.txt": "Договор № STN-101 от 05.02.2026",
+        "02_amendment_signed.txt": "ДС № 1 от 01.03.2026",
+        "03_contract.txt": "Договор № STN-102 от 10.02.2026",
+        "04_contract.txt": "Договор № STN-103 от 20.02.2026",
+        "05_supplier_email.txt": "Письмо от 05.03.2026",
+        "06_amendment_draft.txt": "Проект ДС № 2 от 06.03.2026",
+    }
+    empty = next(d for d in run("tc20_encoding_empty").documents if d.filename == "empty.txt")
+    assert doc_label(empty) == "empty.txt"  # нераспознанный документ — по имени файла
